@@ -15,6 +15,9 @@ def arg_parse():
     parser = ArgumentParser()
     parser.add_argument("-v", "--visualise",
                         action="store_true")
+    parser.add_argument("-s", "--n_total_step",
+                        type=int,
+                        default=10000)
     args = parser.parse_args()
     return args
 
@@ -25,7 +28,6 @@ def main(_):
     env = gym.make("CartPole-v0")
     args.max_step_per_episode = env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')
 
-    n_total_step = 10000
     total_step = 0
 
     model = PCL(env, args)
@@ -34,20 +36,13 @@ def main(_):
 
     with tf.Session() as sess:
         sess.run(init_all_op)
-        model.start(sess)
+        # model.start(sess)
 
         # env = wrappers.Monitor(env, "/Users/kubo-a/tmp/cart")
-        while not should_stop(env, n_total_step, total_step):
-            model.process(sess)
+        while total_step <= args.n_total_step:
+            visualise = True if total_step % 500 == 0 else False
+            model.process(sess, visualise)
             total_step += 1
-
-
-def should_stop(env, n_total_step, total_step):
-    if n_total_step <= total_step:
-        return True
-    else:
-        return False
-
 
 def discount(x, gamma):
     return scipy.signal.lfilter([1], [1, -gamma], x[::-1], axis=0)[::-1]
@@ -78,9 +73,9 @@ def process_rollout(rollout, gamma, lambda_=1.0):
 
 class PartialRollout(object):
     """
-a piece of a complete rollout.  We run our agent, and process its experience
-once it has processed enough steps.
-"""
+    a piece of a complete rollout.  We run our agent, and process its experience
+    once it has processed enough steps.
+    """
 
     def __init__(self):
         self.states = []
@@ -110,44 +105,6 @@ once it has processed enough steps.
         self.features.extend(other.features)
 
 
-class RunnerThread(threading.Thread):
-    """
-    One of the key distinctions between a normal environment and a universe environment
-    is that a universe environment is _real time_.  This means that there should be a thread
-    that would constantly interact with the environment and tell it what to do.  This thread is here.
-    """
-
-    def __init__(self, env, policy, visualise, max_step_per_episode):
-        threading.Thread.__init__(self)
-        self.queue = queue.Queue(5)
-        self.env = env
-        self.last_features = None
-        self.policy = policy
-        self.summary_writer = None
-        self.visualise = visualise
-        self.max_step_per_episode = max_step_per_episode
-
-    def start_runner(self, sess, summary_writer):
-        self.sess = sess
-        self.summary_writer = summary_writer
-        self.start()
-
-    def run(self):
-        with self.sess.as_default() as sess:
-            self._run(sess)
-
-    def _run(self, sess):
-        rollout_provider = env_runner(sess, self.env, self.policy, self.summary_writer,
-                                      self.visualise, self.max_step_per_episode)
-
-        while True:
-            # the timeout variable exists because apparently, if one worker dies, the other workers
-            # won't die with it, unless the timeout is set to some large number.  This is an empirical
-            # observation.
-
-            self.queue.put(rollout_provider.__next__(), timeout=1.0)
-
-
 def env_runner(sess, env, policy, summary_writer, visualize, max_step_per_episode):
     """
     The logic of the thread runner.  In brief, it constantly keeps on running
@@ -159,10 +116,10 @@ def env_runner(sess, env, policy, summary_writer, visualize, max_step_per_episod
     step = 0
     episode_reward = 0
     terminal_end = False
+    rollout = PartialRollout()
 
     while not terminal_end:
         step += 1
-        rollout = PartialRollout()
 
         fetched = policy.act(last_state, *last_features)
         action, value_, features = fetched[0], fetched[1], fetched[2:]
@@ -193,21 +150,20 @@ def env_runner(sess, env, policy, summary_writer, visualize, max_step_per_episod
             print("Episode finished. Sum of reward: %d. step: %d" % (episode_reward, step))
             break
 
-    # if not terminal_end:
-    #     rollout.r = policy.value(last_state, *last_features)
-
     # once we have enough experience, yield it, and have the ThreadRunner place it on a queue
-    yield rollout
+    return rollout
 
 
 class PCL(object):
     def __init__(self, env, args):
         self.env = env
         self.max_step_per_episode = args.max_step_per_episode
+        self.visualise = args.visualise
         self.pi = pi = LinearPolicy(env.observation_space.shape, env.action_space.n)
         self.ac = tf.placeholder(tf.float32, [None, env.action_space.n], name="ac")
         self.adv = tf.placeholder(tf.float32, [None], name="adv")
         self.r = tf.placeholder(tf.float32, [None], name="r")
+        self.queue = queue.Queue(5)
 
         log_prob_tf = tf.nn.log_softmax(pi.logits)
         prob_tf = tf.nn.softmax(pi.logits)
@@ -230,7 +186,8 @@ class PCL(object):
         # on the one hand;  but on the other hand, we get less frequent parameter updates, which
         # slows down learning.  In this code, we found that making local steps be much
         # smaller than 20 makes the algorithm more difficult to tune and to get to work.
-        self.runner = RunnerThread(env, pi, 20, args.visualise)
+
+        # self.runner = RunnerThread(env, pi, 20, args.visualise)
 
         grads = tf.gradients(self.loss, pi.var_list)
 
@@ -251,38 +208,38 @@ class PCL(object):
         self.summary_writer = None
         self.local_steps = 0
 
-    def start(self, sess, summary_writer=None):
-        self.runner.start_runner(sess, summary_writer)
-        # self.summary_writer = summary_writer
-
     def pull_batch_from_queue(self):
         """
         self explanatory:  take a rollout from the queue of the thread runner.
         """
-        rollout = self.runner.queue.get(timeout=5000.0)
+        rollout = self.queue.get(timeout=5000.0)
         # Retrieve one episode
         while not rollout.terminal:
             try:
-                rollout.extend(self.runner.queue.get_nowait())
+                rollout.extend(self.queue.get_nowait())
             except queue.Empty:
                 break
         return rollout
 
-    def process(self, sess):
+    def process(self, sess, visualise):
         """
         process grabs a rollout that's been produced by the thread runner,
         and updates the parameters.  The update is then sent to the parameter
         server.
         """
+        rollout = env_runner(sess, self.env, self.pi, self.summary_writer,
+                             visualise, self.max_step_per_episode)
 
-        rollout = self.pull_batch_from_queue()
+        # self.queue.put(rollout, timeout=1.0)
+        #
+        # rollout = self.pull_batch_from_queue()
         batch = process_rollout(rollout, gamma=0.99, lambda_=1.0)
 
         feed_dict = {
             self.pi.x: batch.si,
             self.ac: batch.a,
             self.adv: batch.adv,
-            self.r: batch.r,
+            self.r: batch.r
         }
 
         fetched = sess.run(self.train_op, feed_dict=feed_dict)
