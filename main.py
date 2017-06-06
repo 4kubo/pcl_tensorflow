@@ -55,8 +55,8 @@ def process_rollout(rollout, gamma, lambda_=1.0):
     """
     given a rollout, compute its returns and the advantage
     """
-    batch_si = np.asarray(rollout.states)
-    batch_a = np.asarray(rollout.actions)
+    batch_states = np.asarray(rollout.states)
+    batch_actions = np.asarray(rollout.actions)
     rewards = np.asarray(rollout.rewards)
     vpred_t = np.asarray(rollout.values + [rollout.r])
 
@@ -68,7 +68,7 @@ def process_rollout(rollout, gamma, lambda_=1.0):
     batch_adv = discount(delta_t, gamma * lambda_)
 
     features = rollout.features[0]
-    return Batch(batch_si, batch_a, batch_adv, batch_r, rollout.terminal, features)
+    return Batch(batch_states, batch_actions, batch_adv, batch_r, rollout.terminal, features)
 
 
 class PartialRollout(object):
