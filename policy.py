@@ -88,20 +88,22 @@ class LSTMPolicy(object):
             time_major=False)
         lstm_c, lstm_h = lstm_state
         x = tf.reshape(lstm_outputs, [-1, size])
-        self.logits = linear(x, ac_space, "action", normalized_columns_initializer(0.01))
-        self.vf = tf.reshape(linear(x, 1, "value", normalized_columns_initializer(1.0)), [-1])
+        self.logits = linear(x, ac_space, "theta", normalized_columns_initializer(0.01))
+        self.values = tf.reshape(linear(x, 1, "value", normalized_columns_initializer(1.0)), [-1])
         self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
         # one-hot vector
-        self.sampled_actions = categorical_sample(self.logits, ac_space)[0, :]
-        self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
+        self.sample = categorical_sample(self.logits, ac_space)[0, :]
+        self.theta = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
+        self.phi = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "phi")
+        # self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
     def get_initial_features(self):
         return self.state_init
 
-    def act(self, ob, c, h):
+    def act(self, state, c, h):
         sess = tf.get_default_session()
-        return sess.run([self.sampled_actions, self.vf] + self.state_out,
-                        {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})
+        return sess.run([self.logits, self.sample, self.values, self.state_out],
+                        {self.x: [state], self.state_in[0]: c, self.state_in[1]: h})
 
     def value(self, ob, c, h):
         sess = tf.get_default_session()

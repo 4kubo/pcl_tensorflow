@@ -39,6 +39,8 @@ def arg_parse():
     parser.add_argument("--target_task",
                         type=str,
                         default="CartPole-v0")
+    parser.add_argument("--is_lstm",
+                        action="store_true")
     args = parser.parse_args()
     return args
 
@@ -46,7 +48,7 @@ def arg_parse():
 def main(_):
     args = arg_parse()
 
-    env = gym.make("CartPole-v0")
+    env = gym.make(args.target_task)
     args.max_step_per_episode = env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')
 
     total_step = 0
@@ -99,7 +101,7 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau):
     return v + discounted_r - tau * g
 
 
-Batch = namedtuple("Batch", ["state", "action", "consistency", "terminal"])
+Batch = namedtuple("Batch", ["state", "action", "consistency", "terminal", "features"])
 
 
 def process_rollout(rollout, d, gamma, tau, lambda_=1.0):
@@ -129,7 +131,7 @@ def process_rollout(rollout, d, gamma, tau, lambda_=1.0):
                                     d, gamma, tau)
 
     features = rollout.features[0]
-    return Batch(batch_states, batch_actions, batch_consistency, rollout.terminal)
+    return Batch(batch_states, batch_actions, batch_consistency, rollout.terminal, features)
 
 
 class PartialRollout(object):
@@ -190,11 +192,16 @@ def env_runner(sess, env, policy, summary_writer, visualize, max_step_per_episod
     episode_reward = 0
     terminal_end = False
     rollout = PartialRollout()
+    features = None
 
     while not terminal_end:
         step += 1
 
-        action_logit, action, value_ = policy.act(last_state, *last_features)
+        fetches = policy.act(last_state, *last_features)
+        action_logit, action, value_ = fetches[0], fetches[1], fetches[2:]
+        if isinstance(value_, list):
+            features = value_[1]
+            value_ = value_[0]
         log_pi = log_softmax(action_logit, action)
         # argmax to convert from one-hot
         state, reward, terminal, info = env.step(action.argmax())
@@ -206,7 +213,7 @@ def env_runner(sess, env, policy, summary_writer, visualize, max_step_per_episod
 
         episode_reward += reward
         last_state = state
-        # last_features = features
+        last_features = features
 
         # if info:
         #     summary = tf.Summary()
@@ -248,9 +255,11 @@ def tf_stack(max_, inner_body, init, dim):
 class PCL(object):
     def __init__(self, env, args):
         self.env = env
+        self.is_lstm = args.is_lstm
         self.max_step_per_episode = args.max_step_per_episode
         self.visualise = args.visualise
-        self.pi = pi = LinearPolicy(env.observation_space.shape, env.action_space.n)
+        # self.pi = pi = LinearPolicy(env.observation_space.shape, env.action_space.n)
+        self.pi = pi = LSTMPolicy(env.observation_space.shape, env.action_space.n)
         self.action = tf.placeholder(tf.float32, [None, env.action_space.n], name="action")
         self.consistency = tf.placeholder(tf.float32, [None],
                                           name="consistency")
@@ -366,6 +375,10 @@ class PCL(object):
             self.action: batch.action,
             self.consistency: batch.consistency
         }
+
+        if self.is_lstm:
+            feed_dict[self.pi.state_in[0]] = batch.features[0]
+            feed_dict[self.pi.state_in[1]] = batch.features[1]
 
         fetches = [self.train_op, self.summary_op] if report else [self.train_op]
 
