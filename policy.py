@@ -48,6 +48,7 @@ def linear(x, size, name, initializer=None, bias_init=0):
 
 
 def categorical_sample(logits, d):
+    # 1st input to tf.multinomial, logits is the unnormalized log probabilities for all classes
     value = tf.squeeze(
         tf.multinomial(logits - tf.reduce_max(logits, [1], keep_dims=True), 1),
         [1])
@@ -90,7 +91,8 @@ class LSTMPolicy(object):
         self.logits = linear(x, ac_space, "action", normalized_columns_initializer(0.01))
         self.vf = tf.reshape(linear(x, 1, "value", normalized_columns_initializer(1.0)), [-1])
         self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
-        self.sample = categorical_sample(self.logits, ac_space)[0, :]
+        # one-hot vector
+        self.sampled_actions = categorical_sample(self.logits, ac_space)[0, :]
         self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
     def get_initial_features(self):
@@ -98,7 +100,7 @@ class LSTMPolicy(object):
 
     def act(self, ob, c, h):
         sess = tf.get_default_session()
-        return sess.run([self.sample, self.vf] + self.state_out,
+        return sess.run([self.sampled_actions, self.vf] + self.state_out,
                         {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})
 
     def value(self, ob, c, h):
@@ -111,21 +113,22 @@ class LinearPolicy(object):
         n_hidden = 10
         # First dimension is the number of steps in an episode
         self.x = x = tf.placeholder(tf.float32, [None] + list(ob_space))
-        x = linear(x, n_hidden, 'commmon')
-        self.logits = linear(x, ac_space, "action",
+        x = linear(x, n_hidden, 'common')
+        self.logits = linear(x, ac_space, "theta",
                              normalized_columns_initializer(0.01))
-        self.vf = tf.reshape(linear(x, 1, "value",
-                                    normalized_columns_initializer(1.0)), [-1])
+        self.values = tf.reshape(linear(x, 1, "phi",
+                                        normalized_columns_initializer(1.0)), [-1])
         self.sample = categorical_sample(self.logits, ac_space)[0, :]
-        self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
-                                          tf.get_variable_scope().name)
+        self.theta = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
+        self.phi = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "phi")
+
 
     def get_initial_features(self):
         return []
 
     def act(self, state):
         sess = tf.get_default_session()
-        return sess.run([self.sample, self.vf], {self.x: [state]})
+        return sess.run([self.logits, self.sample, self.values], {self.x: [state]})
 
     def value(self, sess, state):
         # sess = tf.get_default_session()
