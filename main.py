@@ -1,11 +1,12 @@
 import gym
-from gym import wrappers
+# from gym import wrappers
 from collections import namedtuple
 import numpy as np
 import tensorflow as tf
 import six.moves.queue as queue
+import os
 from argparse import ArgumentParser
-import threading
+# import threading
 import scipy.signal
 
 from policy import LSTMPolicy, LinearPolicy
@@ -27,6 +28,17 @@ def arg_parse():
     parser.add_argument("--d",
                         type=int,
                         default=3)
+    parser.add_argument("--task",
+                        type=int,
+                        default=0)
+    parser.add_argument("--logdir",
+                        type=str,
+                        default="/tmp/pcl")
+    parser.add_argument("--summary",
+                        action="store_true")
+    parser.add_argument("--target_task",
+                        type=str,
+                        default="CartPole-v0")
     args = parser.parse_args()
     return args
 
@@ -42,15 +54,22 @@ def main(_):
     model = PCL(env, args)
 
     init_all_op = tf.global_variables_initializer()
+    logdir = os.path.join(args.logdir, "train")
 
     with tf.Session() as sess:
+        summary_writer = tf.summary.FileWriter(logdir + "_{}".format(args.task), sess.graph)\
+            if args.summary else None
         sess.run(init_all_op)
-        # model.start(sess)
+        model.start(sess, summary_writer)
 
         # env = wrappers.Monitor(env, "/Users/kubo-a/tmp/cart")
         while total_step <= args.n_total_step:
-            visualise = True if total_step % 500 == 0 else False
-            model.process(sess, visualise)
+            if args.visualise:
+                visualise = True if total_step % 500 == 0 else False
+            else:
+                visualise = False
+            report = True if total_step % 100 == 0 else False
+            model.process(sess, visualise, report)
             total_step += 1
 
 def discount(x, gamma):
@@ -176,8 +195,6 @@ def env_runner(sess, env, policy, summary_writer, visualize, max_step_per_episod
         step += 1
 
         action_logit, action, value_ = policy.act(last_state, *last_features)
-        # action_distrib = action_logit / np.sum(action_logit)
-        # log_pi = np.log(action_distrib[0, np.argmax(action)])
         log_pi = log_softmax(action_logit, action)
         # argmax to convert from one-hot
         state, reward, terminal, info = env.step(action.argmax())
@@ -203,7 +220,6 @@ def env_runner(sess, env, policy, summary_writer, visualize, max_step_per_episod
             if step >= max_step_per_episode or not env.metadata.get('semantics.autoreset'):
                 last_state = env.reset()
             last_features = policy.get_initial_features()
-            # print("reward: %d. step: %d" % (episode_reward, step))
             break
 
     # once we have enough experience, yield it, and have the ThreadRunner place it on a queue
@@ -236,47 +252,23 @@ class PCL(object):
         self.visualise = args.visualise
         self.pi = pi = LinearPolicy(env.observation_space.shape, env.action_space.n)
         self.action = tf.placeholder(tf.float32, [None, env.action_space.n], name="action")
-        # self.adv = tf.placeholder(tf.float32, [None], name="adv")
         self.consistency = tf.placeholder(tf.float32, [None],
                                           name="consistency")
         self.values = pi.values
-        # self.r = tf.placeholder(tf.float32, [None], name="r")
         self.queue = queue.Queue(5)
         self.d = args.d
         self.gamma = args.gamma
         self.tau = args.tau
+        self.local_steps = 0
 
         log_prob_tf = tf.nn.log_softmax(pi.logits)
-        prob_tf = tf.nn.softmax(pi.logits)
-
         log_pi = tf.reduce_sum(log_prob_tf * self.action, [1])
         T = tf.shape(self.consistency)[0] + 1
 
         # Making sliding slice indexes
-        # cond1 = lambda i, m:\
-        #     i < T - self.d + 1
-        # body1 = lambda i, m:\
-        #     [i + 1,
-        #      tf.concat([m, tf.reshape(tf.range(self.d) + i, (1, self.d))], axis=0)]
-        # i1 = tf.constant(1)
-        # m1 = tf.reshape(tf.range(self.d), (1, self.d))
-        # _, index1 = tf.while_loop(cond1, body1, loop_vars=[i1, m1],
-        #                         shape_invariants=[i1.get_shape(), tf.TensorShape([None, self.d])])
         body1 = lambda i: tf.range(self.d) + i
         index1 = tf_stack(T - self.d + 1, body1, tf.range(self.d), self.d)
 
-        # cond2 = lambda i, m: i < self.d - 2
-        # body2 = lambda i, m: [i + 1,
-        #                       tf.concat([m,
-        #                                  tf.expand_dims(tf.concat(
-        #                                      [tf.range(self.d - i - 1) + T - self.d + i + 1, -tf.ones((i + 1,), tf.int32)]
-        #                                      , axis=0)
-        #                                                 , axis=0)]
-        #                                 , axis=0)]
-        # i2 = tf.constant(1)
-        # m2 = tf.expand_dims(tf.concat([tf.range(self.d - 1) + T - self.d + 1, -tf.ones(1, tf.int32)], axis=0), axis=0)
-        # _, index2 = tf.while_loop(cond2, body2, loop_vars=[i2, m2],
-        #                         shape_invariants=[i2.get_shape(), tf.TensorShape([None, self.d])])
         body2 = lambda i: \
             tf.concat([tf.range(self.d - i - 1) + T - self.d + i + 1, -tf.ones((i + 1,),
                                                                                tf.int32)], axis=0)
@@ -306,9 +298,6 @@ class PCL(object):
         g = tf.matmul(log_pies, gammas)
         pi_loss = tf.reduce_sum(self.consistency * g)
 
-        exp = [self.d] * (T - self.d + 1) \
-              + [self.d - t - 1 for t in range(self.d - 2)]
-        # gamma_t1 = tf.tile(np.array([[self.gamma ** self.d]]), (T, 1))
         gamma_t1 = tf.cast(tf.tile(np.array([[self.gamma ** self.d]]), [T - self.d + 1, 1]), tf.float32)
         gamma_body = lambda i: tf.reshape(self.gamma ** tf.cast(self.d - i - 1, tf.float32),
                                           (1, 1))
@@ -316,8 +305,6 @@ class PCL(object):
         gamma_t2 = tf_stack(self.d - 2, gamma_body, gamma_init, 1)
         gamma = tf.concat([gamma_t1, gamma_t2], axis=0)
         gamma_t = tf.concat([tf.ones((T - 1, 1)), gamma], axis=1)
-        # v_ = tf.stack([tf.gather(self.values, [[i[0], i[-1]]])
-        #                 for i in index1 + index2])
         v1_init = tf.gather(self.values, [0, self.d - 1])
         v1_body = lambda i: \
             tf.gather(self.values, [tf.gather(index1, i)[0], tf.gather(index1, i)[self.d - 1]])
@@ -333,47 +320,20 @@ class PCL(object):
         grad_theta = tf.gradients(pi_loss, pi.theta)
         grad_phi = tf.gradients(value_loss, pi.phi)
         grads = grad_theta + grad_phi
+        grads, _ = tf.clip_by_global_norm(grads, 40.0)
         grads_and_vars = list(zip(grads, pi.theta + pi.phi))
 
-        # the "policy gradients" loss:  its derivative is precisely the policy gradient
-        # notice that self.ac is a placeholder that is provided externally.
-        # adv will contain the advantages, as calculated in process_rollout
-        # pi_loss = - tf.reduce_sum(tf.reduce_sum(log_prob_tf * self.ac, [1]) * self.adv)
-        #
-        # # loss of value function
-        # vf_loss = 0.5 * tf.reduce_sum(tf.square(pi.vf - self.r))
-        # entropy = - tf.reduce_sum(prob_tf * log_prob_tf)
-        #
         # bs = tf.to_float(tf.shape(pi.x)[0])
-        # self.loss = pi_loss + 0.5 * vf_loss - entropy * 0.01
 
-        # 20 represents the number of "local steps":  the number of timesteps
-        # we run the policy before we update the parameters.
-        # The larger local steps is, the lower is the variance in our policy gradients estimate
-        # on the one hand;  but on the other hand, we get less frequent parameter updates, which
-        # slows down learning.  In this code, we found that making local steps be much
-        # smaller than 20 makes the algorithm more difficult to tune and to get to work.
-
-        # self.runner = RunnerThread(env, pi, 20, args.visualise)
-
-        # grads = tf.gradients(self.loss, pi.var_list)
-
-        # tf.summary.scalar("model/policy_loss", pi_loss / bs)
-        # tf.summary.scalar("model/value_loss", vf_loss / bs)
-        # tf.summary.scalar("model/entropy", entropy / bs)
-        tf.summary.image("model/state", pi.x)
-        tf.summary.scalar("model/grad_global_norm", tf.global_norm(grads))
+        # tf.summary.image("model/state", pi.x)
+        tf.summary.scalar("loss", tf.reduce_sum(self.consistency**2, axis=0))
+        # tf.summary.scalar("model/grad_global_norm", tf.global_norm(grads))
         # tf.summary.scalar("model/var_global_norm", tf.global_norm(pi.var_list))
         self.summary_op = tf.summary.merge_all()
-
-        # grads, _ = tf.clip_by_global_norm(grads, 40.0)
-        # grads_and_vars = list(zip(grads, self.pi.var_list))
 
         # each worker has a different set of adam optimizer parameters
         opt = tf.train.AdamOptimizer(1e-4)
         self.train_op = opt.apply_gradients(grads_and_vars)
-        self.summary_writer = None
-        self.local_steps = 0
 
     def pull_batch_from_queue(self):
         """
@@ -388,7 +348,7 @@ class PCL(object):
                 break
         return rollout
 
-    def process(self, sess, visualise):
+    def process(self, sess, visualise, report):
         """
         process grabs a rollout that's been produced by the thread runner,
         and updates the parameters.  The update is then sent to the parameter
@@ -398,7 +358,6 @@ class PCL(object):
                              visualise, self.max_step_per_episode)
 
         # self.queue.put(rollout, timeout=1.0)
-        #
         # rollout = self.pull_batch_from_queue()
         batch = process_rollout(rollout, self.d, self.gamma, self.tau, lambda_=1.0)
 
@@ -406,18 +365,24 @@ class PCL(object):
             self.pi.x: batch.state,
             self.action: batch.action,
             self.consistency: batch.consistency
-            # self.r: batch.r
         }
 
-        fetched = sess.run(self.train_op, feed_dict=feed_dict)
+        fetches = [self.train_op, self.summary_op] if report else [self.train_op]
+
+        fetched = sess.run(fetches, feed_dict=feed_dict)
 
         # if should_compute_summary:
         #     self.summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
         #     self.summary_writer.flush()
-        loss = np.sum(batch.consistency ** 2)
-        if visualise:
+        loss = np.mean(batch.consistency ** 2)
+        if visualise or report:
+            if self.summary_writer is not None:
+                self.summary_writer.add_summary(fetched[1])
             print("reward : {0:.3}, loss : {1:.3}".format(np.sum(rollout.rewards), loss))
         self.local_steps += 1
+
+    def start(self, sess, summary_writer):
+        self.summary_writer = summary_writer
 
 
 if __name__ == "__main__":
