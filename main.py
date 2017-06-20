@@ -41,6 +41,13 @@ def arg_parse():
                         default="CartPole-v0")
     parser.add_argument("--is_lstm",
                         action="store_true")
+    parser.add_argument("--save_model",
+                        type=str,
+                        default=None)
+    parser.add_argument("--restore_model",
+                        type=str,
+                        default=None,
+                        help="Specify the location from which restore model")
     args = parser.parse_args()
     return args
 
@@ -57,12 +64,20 @@ def main(_):
 
     init_all_op = tf.global_variables_initializer()
     logdir = os.path.join(args.logdir, "train")
+    saver = tf.train.Saver()
 
     with tf.Session() as sess:
         summary_writer = tf.summary.FileWriter(logdir + "_{}".format(args.task), sess.graph)\
             if args.summary else None
         sess.run(init_all_op)
         model.start(sess, summary_writer)
+        if args.restore_model is not None:
+            ckpt = tf.train.get_checkpoint_state(args.restore_model)
+            if ckpt:
+                saver.restore(sess, ckpt.model_checkpoint_path)
+                print("Loaded from {0}".format(ckpt.model_checkpoint_path))
+            else:
+                print("Does not exist : {}".format(ckpt.model_checkpoint_path))
 
         # env = wrappers.Monitor(env, "/Users/kubo-a/tmp/cart")
         while total_step <= args.n_total_step:
@@ -70,8 +85,14 @@ def main(_):
                 visualise = True if total_step % 500 == 0 else False
             else:
                 visualise = False
-            report = True if total_step % 100 == 0 else False
-            model.process(sess, visualise, report)
+            if total_step % 100 == 0:
+                report = True
+                if args.save_model is not None:
+                    saver.save(sess, args.save_model + "/pcl_model.ckpt",
+                               global_step=total_step)
+            else:
+                report = False
+            model.process(sess, total_step, visualise, report)
             total_step += 1
 
 def discount(x, gamma):
@@ -357,7 +378,7 @@ class PCL(object):
                 break
         return rollout
 
-    def process(self, sess, visualise, report):
+    def process(self, sess, step, visualise, report):
         """
         process grabs a rollout that's been produced by the thread runner,
         and updates the parameters.  The update is then sent to the parameter
@@ -391,7 +412,8 @@ class PCL(object):
         if visualise or report:
             if self.summary_writer is not None:
                 self.summary_writer.add_summary(fetched[1])
-            print("reward : {0:.3}, loss : {1:.3}".format(np.sum(rollout.rewards), loss))
+            print("@{2}; reward : {0:.3}, loss : {1:.3}".format(np.sum(rollout.rewards),
+                                                                loss, step))
         self.local_steps += 1
 
     def start(self, sess, summary_writer):
