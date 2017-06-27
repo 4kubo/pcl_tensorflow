@@ -82,7 +82,7 @@ def main(_):
         # env = wrappers.Monitor(env, "/Users/kubo-a/tmp/cart")
         while total_step <= args.n_total_step:
             if args.visualise:
-                visualise = True if total_step % 500 == 0 else False
+                visualise = True if total_step % 100000000000000000000 == 0 else False
             else:
                 visualise = False
             if total_step % 100 == 0:
@@ -118,7 +118,7 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau):
 
     exp = [d] * (T - d + 1) + [d - t - 1 for t in range(d - 2)]
     v_ = np.vstack([values[[i[0], i[-1]], 0] for i in index1 + index2])
-    v = np.sum(v_ * np.array([[-1, e] for e in exp]), axis=1)
+    v = np.sum(v_ * np.array([[-1, gamma**e] for e in exp]), axis=1)
     return v + discounted_r - tau * g
 
 
@@ -137,17 +137,8 @@ def process_rollout(rollout, d, gamma, tau, lambda_=1.0):
     batch_states = np.asarray(rollout.states)
     batch_actions = np.asarray(rollout.actions)
     rewards = np.asarray(rollout.rewards)
-    vpred_t = np.asarray(rollout.values + [rollout.r])
     values = np.asarray(rollout.values)
     log_pies = np.asarray(rollout.log_pies)
-
-    rewards_plus_v = np.asarray(rollout.rewards + [rollout.r])
-    batch_r = discount(rewards_plus_v, gamma)[:-1]
-    delta_t = rewards + gamma * vpred_t[1:] - vpred_t[:-1]
-    # this formula for the advantage comes "Generalized Advantage Estimation":
-    # https://arxiv.org/abs/1506.02438
-    batch_adv = discount(delta_t, gamma * lambda_)
-
     batch_consistency = consistency(values, rewards, log_pies, rollout.T,
                                     d, gamma, tau)
 
@@ -279,8 +270,10 @@ class PCL(object):
         self.is_lstm = args.is_lstm
         self.max_step_per_episode = args.max_step_per_episode
         self.visualise = args.visualise
-        # self.pi = pi = LinearPolicy(env.observation_space.shape, env.action_space.n)
-        self.pi = pi = LSTMPolicy(env.observation_space.shape, env.action_space.n)
+        if args.is_lstm:
+            self.pi = pi = LSTMPolicy(env.observation_space.shape, env.action_space.n)
+        else:
+            self.pi = pi = LinearPolicy(env.observation_space.shape, env.action_space.n)
         self.action = tf.placeholder(tf.float32, [None, env.action_space.n], name="action")
         self.consistency = tf.placeholder(tf.float32, [None],
                                           name="consistency")
@@ -305,10 +298,6 @@ class PCL(object):
         init_m2 = tf.concat([tf.range(self.d - 1) + T - self.d + 1, -tf.ones(1, tf.int32)], axis=0)
         index2 = tf_stack(self.d - 2, body2, init_m2, self.d)
 
-        # log_pies1 = tf.stack([tf.gather(log_pi, i) for i in index1])
-        # log_pies2 = tf.stack([tf.concat([tf.gather(log_pi, i),
-        #                                  tf.zeros(self.d - i.size)], 0)
-        #                       for i in index2])
         log_body1 = lambda i: tf.gather(log_pi, tf.gather(index1, i))
         init_m1 = tf.gather(log_pi, tf.gather(index1, 0))
         log_pies1 = tf_stack(tf.shape(index1)[0], log_body1, init_m1, self.d)
@@ -334,7 +323,7 @@ class PCL(object):
         gamma_init = self.gamma ** (self.d - 1)
         gamma_t2 = tf_stack(self.d - 2, gamma_body, gamma_init, 1)
         gamma = tf.concat([gamma_t1, gamma_t2], axis=0)
-        gamma_t = tf.concat([tf.ones((T - 1, 1)), gamma], axis=1)
+        gamma_t = tf.concat([tf.ones((T - 1, 1)), -1*gamma], axis=1)
         v1_init = tf.gather(self.values, [0, self.d - 1])
         v1_body = lambda i: \
             tf.gather(self.values, [tf.gather(index1, i)[0], tf.gather(index1, i)[self.d - 1]])
@@ -347,22 +336,23 @@ class PCL(object):
         v = tf.reduce_sum(v_ * gamma_t, axis=1)
         value_loss = tf.reduce_sum(self.consistency * v)
 
-        grad_theta = tf.gradients(pi_loss, pi.theta)
-        grad_phi = tf.gradients(value_loss, pi.phi)
-        grads = grad_theta + grad_phi
+        opt = tf.train.AdamOptimizer(1e-4)
+        # grad_theta = tf.gradients(pi_loss, pi.theta)
+        # grad_phi = tf.gradients(value_loss, pi.phi)
+        grad_theta_and_vars = opt.compute_gradients(pi_loss)
+        grad_phi_and_vars = opt.compute_gradients(value_loss)
+        grads_and_vars = grad_theta_and_vars + grad_phi_and_vars
+        grads, vars = list(zip(*grads_and_vars))
         grads, _ = tf.clip_by_global_norm(grads, 40.0)
-        grads_and_vars = list(zip(grads, pi.theta + pi.phi))
+        # grads_and_vars = list(zip(grads, pi.theta + pi.phi))
 
         # bs = tf.to_float(tf.shape(pi.x)[0])
 
         # tf.summary.image("model/state", pi.x)
         tf.summary.scalar("loss", tf.reduce_sum(self.consistency**2, axis=0))
-        # tf.summary.scalar("model/grad_global_norm", tf.global_norm(grads))
-        # tf.summary.scalar("model/var_global_norm", tf.global_norm(pi.var_list))
         self.summary_op = tf.summary.merge_all()
 
         # each worker has a different set of adam optimizer parameters
-        opt = tf.train.AdamOptimizer(1e-4)
         self.train_op = opt.apply_gradients(grads_and_vars)
 
     def pull_batch_from_queue(self):
