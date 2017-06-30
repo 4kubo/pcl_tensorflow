@@ -82,7 +82,7 @@ def main(_):
         # env = wrappers.Monitor(env, "/Users/kubo-a/tmp/cart")
         while total_step <= args.n_total_step:
             if args.visualise:
-                visualise = True if total_step % 100000000000000000000 == 0 else False
+                visualise = True if total_step % 1000 == 0 else False
             else:
                 visualise = False
             if total_step % 10 == 0:
@@ -344,12 +344,15 @@ class PCL(object):
         grad_phi_and_vars = opt.compute_gradients(value_loss)
         grads_and_vars = grad_theta_and_vars + grad_phi_and_vars
         grads, vars = list(zip(*grads_and_vars))
+<<<<<<< HEAD
         # grads, _ = tf.clip_by_global_norm(grads, 40.0)
+=======
+        grads, _ = tf.clip_by_global_norm(grads, 40.0)
+>>>>>>> 284e2fd4923c36f381cc3d97485ee9d323c6ccd5
         # grads_and_vars = list(zip(grads, pi.theta + pi.phi))
 
         # bs = tf.to_float(tf.shape(pi.x)[0])
 
-        # tf.summary.image("model/state", pi.x)
         tf.summary.scalar("loss", tf.reduce_sum(self.consistency**2, axis=0))
         self.summary_op = tf.summary.merge_all()
 
