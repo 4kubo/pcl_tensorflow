@@ -344,11 +344,7 @@ class PCL(object):
         grad_phi_and_vars = opt.compute_gradients(value_loss)
         grads_and_vars = grad_theta_and_vars + grad_phi_and_vars
         grads, vars = list(zip(*grads_and_vars))
-<<<<<<< HEAD
         # grads, _ = tf.clip_by_global_norm(grads, 40.0)
-=======
-        grads, _ = tf.clip_by_global_norm(grads, 40.0)
->>>>>>> 284e2fd4923c36f381cc3d97485ee9d323c6ccd5
         # grads_and_vars = list(zip(grads, pi.theta + pi.phi))
 
         # bs = tf.to_float(tf.shape(pi.x)[0])
