@@ -21,10 +21,10 @@ def arg_parse():
                         default=10000)
     parser.add_argument("--gamma",
                         type=float,
-                        default=0.99)
+                        default=0.9)
     parser.add_argument("--tau",
                         type=float,
-                        default=0.1)
+                        default=0.01)
     parser.add_argument("--d",
                         type=int,
                         default=3)
@@ -82,10 +82,10 @@ def main(_):
         # env = wrappers.Monitor(env, "/Users/kubo-a/tmp/cart")
         while total_step <= args.n_total_step:
             if args.visualise:
-                visualise = True if total_step % 1 == 0 else False
+                visualise = True if total_step % 1000 == 0 else False
             else:
                 visualise = False
-            if total_step % 100 == 0:
+            if total_step % 10 == 0:
                 report = True
                 if args.save_model is not None:
                     saver.save(sess, args.save_model + "/pcl_model.ckpt",
@@ -222,7 +222,7 @@ def env_runner(sess, env, policy, summary_writer, visualize, max_step_per_episod
             env.render()
 
         # collect the experience
-        rollout.add(state, log_pi, action, reward, value_, terminal, last_features)
+        rollout.add(last_state, log_pi, action, reward, value_, terminal, last_features)
 
         episode_reward += reward
         last_state = state
@@ -344,7 +344,11 @@ class PCL(object):
         grad_phi_and_vars = opt.compute_gradients(value_loss)
         grads_and_vars = grad_theta_and_vars + grad_phi_and_vars
         grads, vars = list(zip(*grads_and_vars))
+<<<<<<< HEAD
+        # grads, _ = tf.clip_by_global_norm(grads, 40.0)
+=======
         grads, _ = tf.clip_by_global_norm(grads, 40.0)
+>>>>>>> 284e2fd4923c36f381cc3d97485ee9d323c6ccd5
         # grads_and_vars = list(zip(grads, pi.theta + pi.phi))
 
         # bs = tf.to_float(tf.shape(pi.x)[0])
