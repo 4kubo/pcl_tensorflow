@@ -117,8 +117,9 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau):
     g = lp.dot(np.array(gammas))
 
     exp = [d] * (T - d + 1) + [d - t - 1 for t in range(d - 2)]
+    gamma_d = np.power(gamma, exp)
     v_ = np.vstack([values[[i[0], i[-1]], 0] for i in index1 + index2])
-    v = np.sum(v_ * np.array([[-1, e] for e in exp]), axis=1)
+    v = np.sum(v_*np.c_[-np.ones(T-1), gamma_d], axis=1)
     return v + discounted_r - tau * g
 
 
@@ -323,7 +324,7 @@ class PCL(object):
         gamma_init = self.gamma ** (self.d - 1)
         gamma_t2 = tf_stack(self.d - 2, gamma_body, gamma_init, 1)
         gamma = tf.concat([gamma_t1, gamma_t2], axis=0)
-        gamma_t = tf.concat([tf.ones((T - 1, 1)), gamma], axis=1)
+        gamma_t = tf.concat([tf.ones((T - 1, 1)), -gamma], axis=1)
         v1_init = tf.gather(self.values, [0, self.d - 1])
         v1_body = lambda i: \
             tf.gather(self.values, [tf.gather(index1, i)[0], tf.gather(index1, i)[self.d - 1]])
