@@ -85,7 +85,7 @@ def main(_):
                 visualise = True if total_step % 1000 == 0 else False
             else:
                 visualise = False
-            if total_step % 10 == 0:
+            if total_step % 100 == 0:
                 report = True
                 if args.save_model is not None:
                     saver.save(sess, args.save_model + "/pcl_model.ckpt",
@@ -193,7 +193,8 @@ def log_softmax(action_logit, one_hot_action):
     return log_pi
 
 
-def env_runner(sess, env, policy, summary_writer, visualize, max_step_per_episode):
+def env_runner(sess, env, policy, max_step_per_episode,
+               summary_writer=None, visualize=False):
     """
     The logic of the thread runner.  In brief, it constantly keeps on running
     the policy, and as long as the rollout exceeds a certain length, the thread
@@ -217,7 +218,8 @@ def env_runner(sess, env, policy, summary_writer, visualize, max_step_per_episod
             value_ = value_[0]
         log_pi = log_softmax(action_logit, action)
         # argmax to convert from one-hot
-        state, reward, terminal, info = env.step(action.argmax())
+        action_code = policy.action_decoder(action)
+        state, reward, terminal, info = env.step(action_code)
         if visualize:
             env.render()
 
@@ -272,10 +274,10 @@ class PCL(object):
         self.max_step_per_episode = args.max_step_per_episode
         self.visualise = args.visualise
         if args.is_lstm:
-            self.pi = pi = LSTMPolicy(env.observation_space.shape, env.action_space.n)
+            self.pi = pi = LSTMPolicy(env.observation_space, env.action_space)
         else:
-            self.pi = pi = LinearPolicy(env.observation_space.shape, env.action_space.n)
-        self.action = tf.placeholder(tf.float32, [None, env.action_space.n], name="action")
+            self.pi = pi = LinearPolicy(env.observation_space, env.action_space)
+        self.action = tf.placeholder(tf.float32, [None, pi.action_dim], name="action")
         self.consistency = tf.placeholder(tf.float32, [None],
                                           name="consistency")
         self.values = pi.values
@@ -285,7 +287,7 @@ class PCL(object):
         self.tau = args.tau
         self.local_steps = 0
 
-        log_prob_tf = tf.nn.log_softmax(pi.logits)
+        log_prob_tf = tf.nn.log_softmax(self.pi.logits)
         log_pi = tf.reduce_sum(log_prob_tf * self.action, [1])
         T = tf.shape(self.consistency)[0] + 1
 
@@ -374,11 +376,14 @@ class PCL(object):
         and updates the parameters.  The update is then sent to the parameter
         server.
         """
-        rollout = env_runner(sess, self.env, self.pi, self.summary_writer,
-                             visualise, self.max_step_per_episode)
+        rollout = env_runner(sess, self.env, self.pi, self.max_step_per_episode,
+                              self.summary_writer, visualise)
 
         # self.queue.put(rollout, timeout=1.0)
         # rollout = self.pull_batch_from_queue()
+        # In the too short step case
+        if rollout.T <= self.d:
+            return
         batch = process_rollout(rollout, self.d, self.gamma, self.tau, lambda_=1.0)
 
         feed_dict = {

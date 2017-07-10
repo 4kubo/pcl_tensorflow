@@ -1,4 +1,5 @@
 import numpy as np
+import gym
 import tensorflow as tf
 import tensorflow.contrib.rnn as rnn
 import distutils
@@ -56,15 +57,10 @@ def categorical_sample(logits, d):
 
 
 class LSTMPolicy(object):
-    def __init__(self, ob_space, ac_space):
-        self.x = x = tf.placeholder(tf.float32, [None] + list(ob_space))
+    def __init__(self, ob_space, ac_space, size=256):
+        self.action_dim, self.action_decoder = get_action_space(ac_space)
+        self.x, x = preprocess_observation_space(ob_space)
 
-        for i in range(4):
-            x = tf.nn.elu(conv2d(x, 32, "l{}".format(i + 1), [3, 3], [2, 2]))
-        # introduce a "fake" batch dimension of 1 after flatten so that we can do LSTM over time dim
-        x = tf.expand_dims(flatten(x), [0])
-
-        size = 256
         if use_tf100_api:
             lstm = rnn.BasicLSTMCell(size, state_is_tuple=True)
         else:
@@ -88,11 +84,11 @@ class LSTMPolicy(object):
             time_major=False)
         lstm_c, lstm_h = lstm_state
         x = tf.reshape(lstm_outputs, [-1, size])
-        self.logits = linear(x, ac_space, "theta", normalized_columns_initializer(0.01))
+        self.logits = linear(x, self.action_dim, "theta", normalized_columns_initializer(0.01))
         self.values = tf.reshape(linear(x, 1, "value", normalized_columns_initializer(1.0)), [-1])
         self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
         # one-hot vector
-        self.sample = categorical_sample(self.logits, ac_space)[0, :]
+        self.sample = categorical_sample(self.logits, self.action_dim)[0, :]
         self.theta = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
         self.phi = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "phi")
         # self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
@@ -135,3 +131,40 @@ class LinearPolicy(object):
     def value(self, sess, state):
         # sess = tf.get_default_session()
         return sess.run(self.vf, {self.x: [state]})[0]
+
+def get_action_space(action_space):
+    # If action space is multidimension
+    if isinstance(action_space, gym.spaces.tuple_space.Tuple):
+        action_space_dims = [d.n for d in action_space.spaces]
+        action_space_dim = np.prod(action_space_dims)
+
+        def action_decoder(action):
+            return np.unravel_index(action.argmax(), action_space_dims)
+
+        return action_space_dim, action_decoder
+    else:
+        action_space_dim = action_space.n
+
+        def action_decoder(action):
+            return action.argmax()
+        return action_space_dim, action_decoder
+
+def preprocess_observation_space(observation_space):
+    # If observation is an image, add CNN
+    if isinstance(observation_space, gym.spaces.box.Box) and\
+        len(observation_space.shape) is 3 and\
+        observation_space.shape[-1] is 3:
+        x_placeholder = tf.placeholder(tf.float32, [None] + list(observation_space.shape))
+        x = x_placeholder
+        for i in range(4):
+            x = tf.nn.elu(conv2d(x, 32, "l{}".format(i + 1), [3, 3], [2, 2]))
+        # introduce a "fake" batch dimension of 1 after flatten so that we can do LSTM over time dim
+        x = tf.expand_dims(flatten(x), [0])
+        return x_placeholder, x
+
+    else:
+        obs_dim = observation_space.n
+        x_placeholder = tf.placeholder(tf.int32, [None])
+        one_hot_action = tf.one_hot(x_placeholder, obs_dim, axis=1)
+        x = tf.reshape(one_hot_action, (1, -1, obs_dim))
+        return x_placeholder, x
