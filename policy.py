@@ -103,7 +103,7 @@ class LSTMPolicy(object):
 
     def value(self, ob, c, h):
         sess = tf.get_default_session()
-        return sess.run(self.vf, {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})[0]
+        return sess.run(self.values, {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})[0]
 
 
 class LinearPolicy(object):
@@ -154,7 +154,8 @@ def preprocess_observation_space(observation_space):
     if isinstance(observation_space, gym.spaces.box.Box) and\
         len(observation_space.shape) is 3 and\
         observation_space.shape[-1] is 3:
-        x_placeholder = tf.placeholder(tf.float32, [None] + list(observation_space.shape))
+        x_placeholder = tf.placeholder(tf.float32, [None] + list(observation_space.shape),
+                                       name="observation")
         x = x_placeholder
         for i in range(4):
             x = tf.nn.elu(conv2d(x, 32, "l{}".format(i + 1), [3, 3], [2, 2]))
@@ -164,7 +165,7 @@ def preprocess_observation_space(observation_space):
 
     else:
         obs_dim = observation_space.n
-        x_placeholder = tf.placeholder(tf.int32, [None])
+        x_placeholder = tf.placeholder(tf.int32, [None], name="observation")
         one_hot_action = tf.one_hot(x_placeholder, obs_dim, axis=1)
         x = tf.reshape(one_hot_action, (1, -1, obs_dim))
         return x_placeholder, x

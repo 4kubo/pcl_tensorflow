@@ -102,7 +102,7 @@ def discount(x, gamma):
 def consistency(values, rewards, log_pies, T, d, gamma, tau):
     # Indexes for actions and rewards
     index1 = [np.arange(d) + t for t in range(T - d + 1)]
-    index2 = [np.arange(d - t - 1) + T - d + t + 1 for t in range(d - 2)]
+    index2 = [np.arange(d - t - 1) + T - d + t + 1 for t in range(d - 1)]
 
     gammas = [gamma ** i for i in range(d)]
     r1 = np.vstack([rewards[i] for i in index1])
@@ -116,10 +116,10 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau):
     lp = np.vstack((lp1, lp2))
     g = lp.dot(np.array(gammas))
 
-    exp = [d] * (T - d + 1) + [d - t - 1 for t in range(d - 2)]
+    exp = [d] * (T - d + 1) + [d - t - 1 for t in range(d - 1)]
     gamma_d = np.power(gamma, exp)
-    v_ = np.vstack([values[[i[0], i[-1]], 0] for i in index1 + index2])
-    v = np.sum(v_*np.c_[-np.ones(T-1), gamma_d], axis=1)
+    v_ = np.vstack([values[[i[0], i[-1]+1]] for i in index1 + index2])
+    v = np.sum(v_*np.c_[-np.ones(T), gamma_d], axis=1)
     return v + discounted_r - tau * g
 
 
@@ -153,12 +153,12 @@ class PartialRollout(object):
     once it has processed enough steps.
     """
 
-    def __init__(self):
-        self.states = []
+    def __init__(self, initial_state, initial_value):
+        self.states = [initial_state]
         self.log_pies = []
         self.actions = []
         self.rewards = []
-        self.values = []
+        self.values = [initial_value]
         self.r = 0.0
         self.terminal = False
         self.features = []
@@ -202,10 +202,11 @@ def env_runner(sess, env, policy, max_step_per_episode,
     """
     last_state = env.reset()
     last_features = policy.get_initial_features()
+    initial_value = policy.value(last_state, *last_features)
     step = 0
     episode_reward = 0
     terminal_end = False
-    rollout = PartialRollout()
+    rollout = PartialRollout(last_state, initial_value)
     features = None
 
     while not terminal_end:
@@ -287,9 +288,9 @@ class PCL(object):
         self.tau = args.tau
         self.local_steps = 0
 
-        log_prob_tf = tf.nn.log_softmax(self.pi.logits)
+        log_prob_tf = tf.nn.log_softmax(self.pi.logits[:-1, :])
         log_pi = tf.reduce_sum(log_prob_tf * self.action, [1])
-        T = tf.shape(self.consistency)[0] + 1
+        T = tf.shape(self.consistency)[0]
 
         # Making sliding slice indexes
         body1 = lambda i: tf.range(self.d) + i
@@ -299,7 +300,7 @@ class PCL(object):
             tf.concat([tf.range(self.d - i - 1) + T - self.d + i + 1, -tf.ones((i + 1,),
                                                                                tf.int32)], axis=0)
         init_m2 = tf.concat([tf.range(self.d - 1) + T - self.d + 1, -tf.ones(1, tf.int32)], axis=0)
-        index2 = tf_stack(self.d - 2, body2, init_m2, self.d)
+        index2 = tf_stack(self.d - 1, body2, init_m2, self.d)
 
         log_body1 = lambda i: tf.gather(log_pi, tf.gather(index1, i))
         init_m1 = tf.gather(log_pi, tf.gather(index1, 0))
@@ -324,24 +325,22 @@ class PCL(object):
         gamma_body = lambda i: tf.reshape(self.gamma ** tf.cast(self.d - i - 1, tf.float32),
                                           (1, 1))
         gamma_init = self.gamma ** (self.d - 1)
-        gamma_t2 = tf_stack(self.d - 2, gamma_body, gamma_init, 1)
+        gamma_t2 = tf_stack(self.d - 1, gamma_body, gamma_init, 1)
         gamma = tf.concat([gamma_t1, gamma_t2], axis=0)
-        gamma_t = tf.concat([tf.ones((T - 1, 1)), -gamma], axis=1)
-        v1_init = tf.gather(self.values, [0, self.d - 1])
+        gamma_t = tf.concat([tf.ones((T, 1)), -gamma], axis=1)
+        v1_init = tf.gather(self.values, [0, self.d])
         v1_body = lambda i: \
-            tf.gather(self.values, [tf.gather(index1, i)[0], tf.gather(index1, i)[self.d - 1]])
+            tf.gather(self.values, [tf.gather(index1, i)[0], tf.gather(index1, i)[self.d - 1]+1])
         v1_ = tf_stack(T - self.d + 1, v1_body, v1_init, 2)
-        v2_init = tf.gather(self.values, [T - 2, T - 2 + self.d - 2])
+        v2_init = tf.gather(self.values, [T - self.d + 1, T])
         v2_body = lambda i: \
-            tf.gather(self.values, [tf.gather(index2, i)[0], tf.gather(index2, i)[self.d - 1 - i]])
-        v2_ = tf_stack(self.d - 2, v2_body, v2_init, 2)
+            tf.gather(self.values, [tf.gather(index2, i)[0], T])
+        v2_ = tf_stack(self.d - 1, v2_body, v2_init, 2)
         v_ = tf.concat([v1_, v2_], axis=0)
         v = tf.reduce_sum(v_ * gamma_t, axis=1)
         value_loss = tf.reduce_sum(self.consistency * v)
 
         opt = tf.train.AdamOptimizer(1e-4)
-        # grad_theta = tf.gradients(pi_loss, pi.theta)
-        # grad_phi = tf.gradients(value_loss, pi.phi)
         grad_theta_and_vars = opt.compute_gradients(pi_loss)
         grad_phi_and_vars = opt.compute_gradients(value_loss)
         grads_and_vars = grad_theta_and_vars + grad_phi_and_vars
