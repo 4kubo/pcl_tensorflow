@@ -320,7 +320,7 @@ class PCL(object):
         # Calculation of pi loss
         gammas = tf.constant([[args.gamma ** i] for i in range(self.d)])
         g = tf.matmul(log_pies, gammas)
-        pi_loss = tf.reduce_sum(self.consistency * g)
+        pi_loss = -tf.reduce_sum(self.consistency * g)
 
         gamma_t1 = tf.cast(tf.tile(np.array([[self.gamma ** self.d]]), [T - self.d + 1, 1]), tf.float32)
         gamma_body = lambda i: tf.reshape(self.gamma ** tf.cast(self.d - i - 1, tf.float32),
@@ -339,7 +339,8 @@ class PCL(object):
         v2_ = tf_stack(self.d - 1, v2_body, v2_init, 2)
         v_ = tf.concat([v1_, v2_], axis=0)
         v = tf.reduce_sum(v_ * gamma_t, axis=1)
-        value_loss = tf.reduce_sum(self.consistency * v)
+        value_loss = -tf.reduce_sum(self.consistency * v)
+        self.loss = pi_loss + value_loss
 
         opt = tf.train.AdamOptimizer(1e-4)
         grad_theta_and_vars = opt.compute_gradients(pi_loss)
@@ -355,7 +356,8 @@ class PCL(object):
         self.summary_op = tf.summary.merge_all()
 
         # each worker has a different set of adam optimizer parameters
-        self.train_op = opt.apply_gradients(grads_and_vars)
+        # self.train_op = opt.apply_gradients(grads_and_vars)
+        self.train_op = opt.minimize(self.loss)
 
     def pull_batch_from_queue(self):
         """
@@ -404,11 +406,11 @@ class PCL(object):
         #     self.summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
         #     self.summary_writer.flush()
         loss = np.mean(batch.consistency ** 2)
-        if visualise or report:
-            if self.summary_writer is not None:
-                self.summary_writer.add_summary(fetched[1])
-            print("@{2}; reward : {0:.3}, loss : {1:.3}".format(np.sum(rollout.rewards),
-                                                                loss, step))
+        # if visualise or report:
+        #     print("@{2}; reward : {0:.3}, loss : {1:.3}".format(np.sum(rollout.rewards),
+        #                                                         loss, step))
+        if self.summary_writer is not None:
+            self.summary_writer.add_summary(fetched[1])
         self.local_steps += 1
 
     def start(self, sess, summary_writer):

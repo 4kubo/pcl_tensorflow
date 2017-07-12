@@ -91,7 +91,7 @@ class LSTMPolicy(object):
         self.sample = categorical_sample(self.logits, self.action_dim)[0, :]
         self.theta = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
         self.phi = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "phi")
-        # self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
+        self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
     def get_initial_features(self):
         return self.state_init
@@ -146,6 +146,7 @@ class LinearPolicy(object):
                 return x_placeholder, x
             # e.g. CartPole
             elif len(observation_space.shape) is 1:
+                print("observation dim :", observation_space.shape[0])
                 x = x_placeholder = tf.placeholder(tf.float32, [None, observation_space.shape[0]])
                 x = linear(x, self.n_hidden, 'common')
                 return x_placeholder, x
@@ -154,9 +155,10 @@ class LinearPolicy(object):
         # Discrete
         else:
             obs_dim = observation_space.n
+            print("observation dim :", obs_dim)
             x_placeholder = tf.placeholder(tf.int32, [None], name="observation")
             x = tf.one_hot(x_placeholder, obs_dim, axis=1)
-            for l in range(2):
+            for l in range(3):
                 x = linear(x, self.n_hidden, "common{}".format(l))
             return x_placeholder, x
 
@@ -193,6 +195,7 @@ def preprocess_observation_space(observation_space, n_hidden=32):
             return x_placeholder, x
         # e.g. CartPole
         elif len(observation_space.shape) is 1:
+            print("observation dim :", observation_space.shape[0])
             x = x_placeholder = tf.placeholder(tf.float32, [None, observation_space.shape[0]])
             x = linear(x, n_hidden, 'common')
             x = tf.expand_dims(x, [0])
@@ -202,6 +205,7 @@ def preprocess_observation_space(observation_space, n_hidden=32):
 
     else:
         obs_dim = observation_space.n
+        print("observation dim :", obs_dim)
         x_placeholder = tf.placeholder(tf.int32, [None], name="observation")
         # one hot action vector
         x = tf.one_hot(x_placeholder, obs_dim, axis=1)
