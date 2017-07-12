@@ -1,3 +1,4 @@
+import pyglet
 import gym
 # from gym import wrappers
 from collections import namedtuple
@@ -92,7 +93,7 @@ def main(_):
                                global_step=total_step)
             else:
                 report = False
-            model.process(sess, total_step, visualise, report)
+            model.process(sess, total_step, visualise, report, is_lstm=args.is_lstm)
             total_step += 1
 
 def discount(x, gamma):
@@ -194,7 +195,7 @@ def log_softmax(action_logit, one_hot_action):
 
 
 def env_runner(sess, env, policy, max_step_per_episode,
-               summary_writer=None, visualize=False):
+               summary_writer=None, visualize=False, is_lstm=False):
     """
     The logic of the thread runner.  In brief, it constantly keeps on running
     the policy, and as long as the rollout exceeds a certain length, the thread
@@ -207,16 +208,16 @@ def env_runner(sess, env, policy, max_step_per_episode,
     episode_reward = 0
     terminal_end = False
     rollout = PartialRollout(last_state, initial_value)
-    features = None
+    features = [None, None]
 
     while not terminal_end:
         step += 1
 
         fetches = policy.act(last_state, *last_features)
         action_logit, action, value_ = fetches[0], fetches[1], fetches[2:]
-        if isinstance(value_, list):
+        value = value_[0]
+        if is_lstm:
             features = value_[1]
-            value_ = value_[0]
         log_pi = log_softmax(action_logit, action)
         # argmax to convert from one-hot
         action_code = policy.action_decoder(action)
@@ -225,7 +226,7 @@ def env_runner(sess, env, policy, max_step_per_episode,
             env.render()
 
         # collect the experience
-        rollout.add(last_state, log_pi, action, reward, value_, terminal, last_features)
+        rollout.add(last_state, log_pi, action, reward, value, terminal, last_features)
 
         episode_reward += reward
         last_state = state
@@ -344,9 +345,9 @@ class PCL(object):
         grad_theta_and_vars = opt.compute_gradients(pi_loss)
         grad_phi_and_vars = opt.compute_gradients(value_loss)
         grads_and_vars = grad_theta_and_vars + grad_phi_and_vars
-        grads, vars = list(zip(*grads_and_vars))
+        # grads, vars = list(zip(*grads_and_vars))
         # grads, _ = tf.clip_by_global_norm(grads, 40.0)
-        # grads_and_vars = list(zip(grads, pi.theta + pi.phi))
+        # grads_and_vars = list(zip(grads, vars))
 
         # bs = tf.to_float(tf.shape(pi.x)[0])
 
@@ -369,14 +370,14 @@ class PCL(object):
                 break
         return rollout
 
-    def process(self, sess, step, visualise, report):
+    def process(self, sess, step, visualise, report, is_lstm=False):
         """
         process grabs a rollout that's been produced by the thread runner,
         and updates the parameters.  The update is then sent to the parameter
         server.
         """
         rollout = env_runner(sess, self.env, self.pi, self.max_step_per_episode,
-                              self.summary_writer, visualise)
+                              self.summary_writer, visualise, is_lstm=is_lstm)
 
         # self.queue.put(rollout, timeout=1.0)
         # rollout = self.pull_batch_from_queue()
