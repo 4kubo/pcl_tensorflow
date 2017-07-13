@@ -360,7 +360,8 @@ class PCL(object):
 
         # each worker has a different set of adam optimizer parameters
         self.train_op = opt.apply_gradients(grads_and_vars)
-        # self.train_op = opt.minimize(self.loss)
+        self.train_theta = opt.apply_gradients(grad_theta_and_vars)
+        self.train_phi = opt.apply_gradients(grad_phi_and_vars)
 
     def pull_batch_from_queue(self):
         """
@@ -403,8 +404,10 @@ class PCL(object):
             feed_dict[self.pi.state_in[1]] = batch.features[1]
 
         # fetches = [self.train_op, self.summary_op] if report else [self.train_op]
-        fetches = [self.train_op, self.summary_op]\
-            if report or self.summary_writer is not None else [self.train_op]
+        # fetches = [self.train_op, self.summary_op]\
+        #     if report or self.summary_writer is not None else [self.train_op]
+        fetches = [self.train_theta, self.train_phi, self.summary_op] \
+            if report or self.summary_writer is not None else [self.train_theta, self.train_phi]
 
         fetched = sess.run(fetches, feed_dict=feed_dict)
 
@@ -416,7 +419,7 @@ class PCL(object):
             print("@{2}; reward : {0:.3}, loss : {1:.3}".format(np.sum(rollout.rewards),
                                                                 loss, step))
         if self.summary_writer is not None:
-            self.summary_writer.add_summary(fetched[1])
+            self.summary_writer.add_summary(fetched[-1])
         self.local_steps += 1
 
     def start(self, sess, summary_writer):
