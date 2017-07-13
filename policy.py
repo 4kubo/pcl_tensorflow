@@ -51,47 +51,51 @@ def linear(x, size, name, initializer=None, bias_init=0):
 def categorical_sample(logits, d):
     # 1st input to tf.multinomial, logits is the unnormalized log probabilities for all classes
     value = tf.squeeze(
-        tf.multinomial(logits - tf.reduce_max(logits, [1], keep_dims=True), 1),
+        # tf.multinomial(logits - tf.reduce_max(logits, [1], keep_dims=True), 1),
+        tf.multinomial(tf.nn.log_softmax(logits - tf.reduce_max(logits, [1], keep_dims=True))*5, 1),
         [1])
     return tf.one_hot(value, d)
 
 
 class LSTMPolicy(object):
     def __init__(self, ob_space, ac_space, size=256):
-        self.action_dim, self.action_decoder = get_action_space(ac_space)
-        self.x, x = preprocess_observation_space(ob_space)
+        with tf.variable_scope("common"):
+            self.action_dim, self.action_decoder = get_action_space(ac_space)
+            self.x, x = preprocess_observation_space(ob_space)
 
-        if use_tf100_api:
-            lstm = rnn.BasicLSTMCell(size, state_is_tuple=True)
-        else:
-            lstm = rnn.rnn_cell.BasicLSTMCell(size, state_is_tuple=True)
-        self.state_size = lstm.state_size
-        step_size = tf.shape(self.x)[:1]
+            if use_tf100_api:
+                lstm = rnn.BasicLSTMCell(size, state_is_tuple=True)
+            else:
+                lstm = rnn.rnn_cell.BasicLSTMCell(size, state_is_tuple=True)
+            self.state_size = lstm.state_size
+            step_size = tf.shape(self.x)[:1]
 
-        c_init = np.zeros((1, lstm.state_size.c), np.float32)
-        h_init = np.zeros((1, lstm.state_size.h), np.float32)
-        self.state_init = [c_init, h_init]
-        c_in = tf.placeholder(tf.float32, [1, lstm.state_size.c])
-        h_in = tf.placeholder(tf.float32, [1, lstm.state_size.h])
-        self.state_in = [c_in, h_in]
+            c_init = np.zeros((1, lstm.state_size.c), np.float32)
+            h_init = np.zeros((1, lstm.state_size.h), np.float32)
+            self.state_init = [c_init, h_init]
+            c_in = tf.placeholder(tf.float32, [1, lstm.state_size.c])
+            h_in = tf.placeholder(tf.float32, [1, lstm.state_size.h])
+            self.state_in = [c_in, h_in]
 
-        if use_tf100_api:
-            state_in = rnn.LSTMStateTuple(c_in, h_in)
-        else:
-            state_in = rnn.rnn_cell.LSTMStateTuple(c_in, h_in)
-        lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
-            lstm, x, initial_state=state_in, sequence_length=step_size,
-            time_major=False)
-        lstm_c, lstm_h = lstm_state
-        x = tf.reshape(lstm_outputs, [-1, size])
+            if use_tf100_api:
+                state_in = rnn.LSTMStateTuple(c_in, h_in)
+            else:
+                state_in = rnn.rnn_cell.LSTMStateTuple(c_in, h_in)
+            lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
+                lstm, x, initial_state=state_in, sequence_length=step_size,
+                time_major=False)
+            lstm_c, lstm_h = lstm_state
+            x = tf.reshape(lstm_outputs, [-1, size])
+
         self.logits = linear(x, self.action_dim, "theta", normalized_columns_initializer(0.01))
-        self.values = tf.reshape(linear(x, 1, "value", normalized_columns_initializer(1.0)), [-1])
+        self.values = tf.reshape(linear(x, 1, "phi", normalized_columns_initializer(1.0)), [-1])
         self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
         # one-hot vector
         self.sample = categorical_sample(self.logits, self.action_dim)[0, :]
-        self.theta = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
-        self.phi = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "phi")
-        self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
+        common_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "common")
+        self.theta = common_var + tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
+        self.phi = common_var + tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "phi")
+        # self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
     def get_initial_features(self):
         return self.state_init

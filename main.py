@@ -124,7 +124,7 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau):
     return v + discounted_r - tau * g
 
 
-Batch = namedtuple("Batch", ["state", "action", "consistency", "terminal", "features"])
+Batch = namedtuple("Batch", ["state", "action", "consistency", "terminal", "features", "reward"])
 
 
 def process_rollout(rollout, d, gamma, tau, lambda_=1.0):
@@ -145,7 +145,7 @@ def process_rollout(rollout, d, gamma, tau, lambda_=1.0):
                                     d, gamma, tau)
 
     features = rollout.features[0]
-    return Batch(batch_states, batch_actions, batch_consistency, rollout.terminal, features)
+    return Batch(batch_states, batch_actions, batch_consistency, rollout.terminal, features, np.sum(rewards))
 
 
 class PartialRollout(object):
@@ -215,6 +215,7 @@ def env_runner(sess, env, policy, max_step_per_episode,
 
         fetches = policy.act(last_state, *last_features)
         action_logit, action, value_ = fetches[0], fetches[1], fetches[2:]
+        # print(action.argmax(), action_logit.argmax())
         value = value_[0]
         if is_lstm:
             features = value_[1]
@@ -288,6 +289,7 @@ class PCL(object):
         self.gamma = args.gamma
         self.tau = args.tau
         self.local_steps = 0
+        self.reward = tf.placeholder(tf.float32, name="reward")
 
         log_prob_tf = tf.nn.log_softmax(self.pi.logits[:-1, :])
         log_pi = tf.reduce_sum(log_prob_tf * self.action, [1])
@@ -343,8 +345,8 @@ class PCL(object):
         self.loss = pi_loss + value_loss
 
         opt = tf.train.AdamOptimizer(1e-4)
-        grad_theta_and_vars = opt.compute_gradients(pi_loss)
-        grad_phi_and_vars = opt.compute_gradients(value_loss)
+        grad_theta_and_vars = opt.compute_gradients(pi_loss, pi.theta)
+        grad_phi_and_vars = opt.compute_gradients(value_loss, pi.phi)
         grads_and_vars = grad_theta_and_vars + grad_phi_and_vars
         # grads, vars = list(zip(*grads_and_vars))
         # grads, _ = tf.clip_by_global_norm(grads, 40.0)
@@ -352,12 +354,13 @@ class PCL(object):
 
         # bs = tf.to_float(tf.shape(pi.x)[0])
 
-        tf.summary.scalar("loss", tf.reduce_sum(self.consistency**2, axis=0))
+        tf.summary.scalar("loss", tf.reduce_sum(self.consistency ** 2, axis=0))
+        tf.summary.scalar("reward", self.reward)
         self.summary_op = tf.summary.merge_all()
 
         # each worker has a different set of adam optimizer parameters
-        # self.train_op = opt.apply_gradients(grads_and_vars)
-        self.train_op = opt.minimize(self.loss)
+        self.train_op = opt.apply_gradients(grads_and_vars)
+        # self.train_op = opt.minimize(self.loss)
 
     def pull_batch_from_queue(self):
         """
@@ -391,24 +394,27 @@ class PCL(object):
         feed_dict = {
             self.pi.x: batch.state,
             self.action: batch.action,
-            self.consistency: batch.consistency
+            self.consistency: batch.consistency,
+            self.reward : batch.reward
         }
 
         if self.is_lstm:
             feed_dict[self.pi.state_in[0]] = batch.features[0]
             feed_dict[self.pi.state_in[1]] = batch.features[1]
 
-        fetches = [self.train_op, self.summary_op] if report else [self.train_op]
+        # fetches = [self.train_op, self.summary_op] if report else [self.train_op]
+        fetches = [self.train_op, self.summary_op]\
+            if report or self.summary_writer is not None else [self.train_op]
 
         fetched = sess.run(fetches, feed_dict=feed_dict)
 
         # if should_compute_summary:
         #     self.summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
         #     self.summary_writer.flush()
-        loss = np.mean(batch.consistency ** 2)
-        # if visualise or report:
-        #     print("@{2}; reward : {0:.3}, loss : {1:.3}".format(np.sum(rollout.rewards),
-        #                                                         loss, step))
+        if visualise or report:
+            loss = np.mean(batch.consistency ** 2)
+            print("@{2}; reward : {0:.3}, loss : {1:.3}".format(np.sum(rollout.rewards),
+                                                                loss, step))
         if self.summary_writer is not None:
             self.summary_writer.add_summary(fetched[1])
         self.local_steps += 1
