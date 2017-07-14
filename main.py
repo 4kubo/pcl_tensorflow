@@ -234,7 +234,6 @@ def env_runner(sess, env, policy, max_step_per_episode,
         if is_lstm:
             features = value_[1]
         log_pi, action = sample_log_pi(action_logit, policy.action_dim)
-        # print(action_logit.argmax(), action.argmax())
         # argmax to convert from one-hot
         action_code = policy.action_decoder(action)
         state, reward, terminal, info = env.step(action_code)
@@ -356,10 +355,8 @@ class PCL(object):
         v_t_d2 = tf.ones(self.d-1)*self.values[T]
         v_t_d = tf.concat([v_t_d1, v_t_d2], axis=0)
 
-        # value_loss = -tf.reduce_sum(self.consistency * v)
-
         consistency = - v_t + gamma*v_t_d + self.discounted_r - self.tau*g
-        self.loss = consistency**2
+        self.loss = tf.pow(consistency, 2)
 
         opt_pi = tf.train.AdamOptimizer(7e-4)
         opt_value = tf.train.AdamOptimizer(4e-4)

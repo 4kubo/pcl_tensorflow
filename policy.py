@@ -129,8 +129,8 @@ class LinearPolicy(object):
 
         with tf.variable_scope("phi"):
             hidden_v = relu(x, 50, "hidden0")
-            self.values = tf.reshape(relu(hidden_v, 1, "value",
-                                            normalized_columns_initializer(1.0)), [-1])
+            self.values = tf.reshape(relu(hidden_v, 1, "value"), [-1])
+                                            # normalized_columns_initializer(1.0)), [-1])
         # self.sample = categorical_sample(self.logits, self.action_dim)[0, :]
 
         # Collecting trainable variables
