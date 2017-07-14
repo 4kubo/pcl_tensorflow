@@ -54,20 +54,14 @@ def relu(x, size, name, initializer=None, bias_init=0):
     return tf.nn.relu(y, "relu")
 
 
-def categorical_sample(logits, d):
-    # 1st input to tf.multinomial, logits is the unnormalized log probabilities for all classes
-    value = tf.squeeze(
-        # tf.multinomial(logits - tf.reduce_max(logits, [1], keep_dims=True), 1),
-        tf.multinomial(tf.nn.log_softmax(logits - tf.reduce_max(logits, [1], keep_dims=True))*5, 1),
-        [1])
-    return tf.one_hot(value, d)
-
-
 class LSTMPolicy(object):
-    def __init__(self, ob_space, ac_space, size=256):
+    def __init__(self, ob_space, ac_space, size=128):
         with tf.variable_scope("common"):
             self.action_dim, self.action_decoder = get_action_space(ac_space)
             self.x, x = preprocess_observation_space(ob_space)
+            # introduce a "fake" batch dimension of 1 after flatten so that
+            #  we can do LSTM over time dim
+            x = tf.expand_dims(x, [0])
 
             if use_tf100_api:
                 lstm = rnn.BasicLSTMCell(size, state_is_tuple=True)
@@ -98,18 +92,19 @@ class LSTMPolicy(object):
         self.values = tf.reshape(relu(x, 1, "phi", normalized_columns_initializer(1.0)), [-1])
         self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
         # one-hot vector
-        self.sample = categorical_sample(self.logits, self.action_dim)[0, :]
+        # self.sample = categorical_sample(self.logits, self.action_dim)[0, :]
         common_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "common")
         self.theta = common_var + tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
         self.phi = common_var + tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "phi")
-        # self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
     def get_initial_features(self):
         return self.state_init
 
     def act(self, state, c, h):
         sess = tf.get_default_session()
-        return sess.run([self.logits, self.sample, self.values, self.state_out],
+        # return sess.run([self.logits, self.sample, self.values, self.state_out],
+        #                 {self.x: [state], self.state_in[0]: c, self.state_in[1]: h})
+        return sess.run([self.logits, self.values, self.state_out],
                         {self.x: [state], self.state_in[0]: c, self.state_in[1]: h})
 
     def value(self, ob, c, h):
@@ -118,12 +113,12 @@ class LSTMPolicy(object):
 
 
 class LinearPolicy(object):
-    def __init__(self, ob_space, ac_space, n_hidden = 10):
+    def __init__(self, ob_space, ac_space, n_hidden = 50):
         self.n_hidden = n_hidden
         # First dimension is the number of steps in an episode
         with tf.variable_scope("common"):
             self.action_dim, self.action_decoder = get_action_space(ac_space)
-            self.x, x = self.preprocess_observation_space(ob_space)
+            self.x, x = preprocess_observation_space(ob_space, n_hidden)
 
         with tf.variable_scope("theta"):
             hidden_pi = relu(x, 50, "hidden0")
@@ -136,7 +131,7 @@ class LinearPolicy(object):
             hidden_v = relu(x, 50, "hidden0")
             self.values = tf.reshape(relu(hidden_v, 1, "value",
                                             normalized_columns_initializer(1.0)), [-1])
-        self.sample = categorical_sample(self.logits, self.action_dim)[0, :]
+        # self.sample = categorical_sample(self.logits, self.action_dim)[0, :]
 
         # Collecting trainable variables
         common_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "common")
@@ -148,42 +143,11 @@ class LinearPolicy(object):
 
     def act(self, state, *_):
         sess = tf.get_default_session()
-        return sess.run([self.logits, self.sample, self.values], {self.x: [state]})
+        return sess.run([self.logits, self.values], {self.x: [state]})
 
     def value(self, state, *_):
         sess = tf.get_default_session()
         return sess.run(self.values, {self.x: [state]})[0]
-
-    def preprocess_observation_space(self, observation_space):
-        if isinstance(observation_space, gym.spaces.box.Box):
-            # If observation is an image, add CNN
-            if len(observation_space.shape) is 3 and observation_space.shape[-1] is 3:
-                x_placeholder = tf.placeholder(tf.float32, [None] + list(observation_space.shape),
-                                               name="observation")
-                x = x_placeholder
-                for i in range(4):
-                    x = tf.nn.elu(conv2d(x, 32, "l{}".format(i + 1), [3, 3], [2, 2]))
-                # introduce a "fake" batch dimension of 1 after flatten so that we can do LSTM over time dim
-                x = flatten(x)
-                return x_placeholder, x
-            # e.g. CartPole
-            elif len(observation_space.shape) is 1:
-                print("observation dim :", observation_space.shape[0])
-                x = x_placeholder = tf.placeholder(tf.float32, [None, observation_space.shape[0]])
-                for i in range(2):
-                    x = relu(x, self.n_hidden, 'relu{}'.format(i))
-                return x_placeholder, x
-            else:
-                print("Not implemented yet!")
-        # Discrete
-        else:
-            obs_dim = observation_space.n
-            print("observation dim :", obs_dim)
-            x_placeholder = tf.placeholder(tf.int32, [None], name="observation")
-            x = tf.one_hot(x_placeholder, obs_dim, axis=1)
-            for l in range(3):
-                x = linear(x, self.n_hidden, "common{}".format(l))
-            return x_placeholder, x
 
 
 def get_action_space(action_space):
@@ -213,8 +177,7 @@ def preprocess_observation_space(observation_space, n_hidden=32):
             x = x_placeholder
             for i in range(4):
                 x = tf.nn.elu(conv2d(x, 32, "l{}".format(i + 1), [3, 3], [2, 2]))
-            # introduce a "fake" batch dimension of 1 after flatten so that we can do LSTM over time dim
-            x = tf.expand_dims(flatten(x), [0])
+            x = flatten(x)
             return x_placeholder, x
         # e.g. CartPole
         elif len(observation_space.shape) is 1:
@@ -222,11 +185,10 @@ def preprocess_observation_space(observation_space, n_hidden=32):
             x = x_placeholder = tf.placeholder(tf.float32, [None, observation_space.shape[0]])
             for i in range(2):
                 x = relu(x, n_hidden, 'common{}'.format(i))
-            x = tf.expand_dims(x, [0])
             return x_placeholder, x
         else:
             print("Not implemented yet!")
-
+    # Discrete
     else:
         obs_dim = observation_space.n
         print("observation dim :", obs_dim)
@@ -234,6 +196,5 @@ def preprocess_observation_space(observation_space, n_hidden=32):
         # one hot action vector
         x = tf.one_hot(x_placeholder, obs_dim, axis=1)
         for l in range(2):
-            x = linear(x, n_hidden, "common{}".format(l))
-        x = tf.expand_dims(x, [0])
+            x = relu(x, n_hidden, "common{}".format(l))
         return x_placeholder, x
