@@ -47,6 +47,12 @@ def linear(x, size, name, initializer=None, bias_init=0):
     b = tf.get_variable(name + "/b", [size], initializer=tf.constant_initializer(bias_init))
     return tf.matmul(x, w) + b
 
+def relu(x, size, name, initializer=None, bias_init=0):
+    w = tf.get_variable(name + "/w", [x.get_shape()[1], size], initializer=initializer)
+    b = tf.get_variable(name + "/b", [size], initializer=tf.constant_initializer(bias_init))
+    y = tf.matmul(x, w) + b
+    return tf.nn.relu(y, "relu")
+
 
 def categorical_sample(logits, d):
     # 1st input to tf.multinomial, logits is the unnormalized log probabilities for all classes
@@ -87,8 +93,9 @@ class LSTMPolicy(object):
             lstm_c, lstm_h = lstm_state
             x = tf.reshape(lstm_outputs, [-1, size])
 
-        self.logits = linear(x, self.action_dim, "theta", normalized_columns_initializer(0.01))
-        self.values = tf.reshape(linear(x, 1, "phi", normalized_columns_initializer(1.0)), [-1])
+        last = relu(x, self.action_dim, "theta", normalized_columns_initializer(0.01))
+        self.logits = tf.nn.softmax(last, name="theta/softmax")
+        self.values = tf.reshape(relu(x, 1, "phi", normalized_columns_initializer(1.0)), [-1])
         self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
         # one-hot vector
         self.sample = categorical_sample(self.logits, self.action_dim)[0, :]
@@ -114,16 +121,27 @@ class LinearPolicy(object):
     def __init__(self, ob_space, ac_space, n_hidden = 10):
         self.n_hidden = n_hidden
         # First dimension is the number of steps in an episode
-        self.action_dim, self.action_decoder = get_action_space(ac_space)
+        with tf.variable_scope("common"):
+            self.action_dim, self.action_decoder = get_action_space(ac_space)
+            self.x, x = self.preprocess_observation_space(ob_space)
 
-        self.x, x = self.preprocess_observation_space(ob_space)
-        self.logits = linear(x, self.action_dim, "theta",
-                             normalized_columns_initializer(0.01))
-        self.values = tf.reshape(linear(x, 1, "phi",
-                                        normalized_columns_initializer(1.0)), [-1])
+        with tf.variable_scope("theta"):
+            hidden_pi = relu(x, 50, "hidden0")
+            hidden_pi = relu(hidden_pi, self.action_dim, "hidden1")
+            self.logits = tf.nn.softmax(hidden_pi, name="softmax")
+            # self.logits = relu(hidden_pi, self.action_dim, "theta",
+            #                      normalized_columns_initializer(0.01))
+
+        with tf.variable_scope("phi"):
+            hidden_v = relu(x, 50, "hidden0")
+            self.values = tf.reshape(relu(hidden_v, 1, "value",
+                                            normalized_columns_initializer(1.0)), [-1])
         self.sample = categorical_sample(self.logits, self.action_dim)[0, :]
-        self.theta = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
-        self.phi = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "phi")
+
+        # Collecting trainable variables
+        common_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "common")
+        self.theta = common_var + tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
+        self.phi = common_var + tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "phi")
 
     def get_initial_features(self):
         return [None, None]
@@ -152,7 +170,8 @@ class LinearPolicy(object):
             elif len(observation_space.shape) is 1:
                 print("observation dim :", observation_space.shape[0])
                 x = x_placeholder = tf.placeholder(tf.float32, [None, observation_space.shape[0]])
-                x = linear(x, self.n_hidden, 'common')
+                for i in range(2):
+                    x = relu(x, self.n_hidden, 'relu{}'.format(i))
                 return x_placeholder, x
             else:
                 print("Not implemented yet!")
@@ -201,7 +220,8 @@ def preprocess_observation_space(observation_space, n_hidden=32):
         elif len(observation_space.shape) is 1:
             print("observation dim :", observation_space.shape[0])
             x = x_placeholder = tf.placeholder(tf.float32, [None, observation_space.shape[0]])
-            x = linear(x, n_hidden, 'common')
+            for i in range(2):
+                x = relu(x, n_hidden, 'common{}'.format(i))
             x = tf.expand_dims(x, [0])
             return x_placeholder, x
         else:

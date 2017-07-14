@@ -119,12 +119,14 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau):
 
     exp = [d] * (T - d + 1) + [d - t - 1 for t in range(d - 1)]
     gamma_d = np.power(gamma, exp)
-    v_ = np.vstack([values[[i[0], i[-1]+1]] for i in index1 + index2])
+    v_ = np.vstack([values[[i[0], i[-1] + 1]] for i in index1 + index2])
+    v_t = np.array([values[i[0]] for i in index1 + index2])
+    v_t_d = np.array([values[i[-1]+1] for i in index1 + index2])
     v = np.sum(v_*np.c_[-np.ones(T), gamma_d], axis=1)
-    return v + discounted_r - tau * g
+    return -v_t + gamma_d*v_t_d + discounted_r - tau*g, discounted_r
 
 
-Batch = namedtuple("Batch", ["state", "action", "consistency", "terminal", "features", "reward"])
+Batch = namedtuple("Batch", ["state", "action", "consistency", "terminal", "features", "reward", "discounted_r"])
 
 
 def process_rollout(rollout, d, gamma, tau, lambda_=1.0):
@@ -141,11 +143,12 @@ def process_rollout(rollout, d, gamma, tau, lambda_=1.0):
     rewards = np.asarray(rollout.rewards)
     values = np.asarray(rollout.values)
     log_pies = np.asarray(rollout.log_pies)
-    batch_consistency = consistency(values, rewards, log_pies, rollout.T,
+    batch_consistency, discounted_r = consistency(values, rewards, log_pies, rollout.T,
                                     d, gamma, tau)
 
     features = rollout.features[0]
-    return Batch(batch_states, batch_actions, batch_consistency, rollout.terminal, features, np.sum(rewards))
+    return Batch(batch_states, batch_actions, batch_consistency, rollout.terminal,
+                 features, np.sum(rewards), discounted_r)
 
 
 class PartialRollout(object):
@@ -193,6 +196,16 @@ def log_softmax(action_logit, one_hot_action):
     log_pi = log_distrib[0, one_hot_action.argmax()]
     return log_pi
 
+def sample_log_pi(action_logit):
+    action_logit = np.squeeze(action_logit, 0)
+    sum_ = np.sum(action_logit)
+    # print(sum_)
+    pi = action_logit / sum_
+    action_id = np.random.choice(np.arange(pi.shape[0]), p=pi)
+    log_pi = np.log(pi)
+    log_pi = log_pi[action_id]
+    return log_pi
+
 
 def env_runner(sess, env, policy, max_step_per_episode,
                summary_writer=None, visualize=False, is_lstm=False):
@@ -215,11 +228,13 @@ def env_runner(sess, env, policy, max_step_per_episode,
 
         fetches = policy.act(last_state, *last_features)
         action_logit, action, value_ = fetches[0], fetches[1], fetches[2:]
+        # print(action_logit)
         # print(action.argmax(), action_logit.argmax())
         value = value_[0]
         if is_lstm:
             features = value_[1]
-        log_pi = log_softmax(action_logit, action)
+        # log_pi = log_softmax(action_logit, action)
+        log_pi = sample_log_pi(action_logit)
         # argmax to convert from one-hot
         action_code = policy.action_decoder(action)
         state, reward, terminal, info = env.step(action_code)
@@ -290,8 +305,10 @@ class PCL(object):
         self.tau = args.tau
         self.local_steps = 0
         self.reward = tf.placeholder(tf.float32, name="reward")
+        self.discounted_r = tf.placeholder(tf.float32, [None], name="discounted_r")
 
-        log_prob_tf = tf.nn.log_softmax(self.pi.logits[:-1, :])
+        # log_prob_tf = tf.nn.log_softmax(self.pi.logits[:-1, :])
+        log_prob_tf = tf.log(self.pi.logits[:-1, :])
         log_pi = tf.reduce_sum(log_prob_tf * self.action, [1])
         T = tf.shape(self.consistency)[0]
 
@@ -322,6 +339,7 @@ class PCL(object):
         # Calculation of pi loss
         gammas = tf.constant([[args.gamma ** i] for i in range(self.d)])
         g = tf.matmul(log_pies, gammas)
+        g = tf.squeeze(g, axis=1)
         pi_loss = -tf.reduce_sum(self.consistency * g)
 
         gamma_t1 = tf.cast(tf.tile(np.array([[self.gamma ** self.d]]), [T - self.d + 1, 1]), tf.float32)
@@ -330,23 +348,52 @@ class PCL(object):
         gamma_init = self.gamma ** (self.d - 1)
         gamma_t2 = tf_stack(self.d - 1, gamma_body, gamma_init, 1)
         gamma = tf.concat([gamma_t1, gamma_t2], axis=0)
-        gamma_t = tf.concat([tf.ones((T, 1)), -gamma], axis=1)
+        gamma = tf.squeeze(gamma, axis=1)
+        # gamma_t = tf.concat([tf.ones((T, 1)), -gamma], axis=1)
         v1_init = tf.gather(self.values, [0, self.d])
         v1_body = lambda i: \
-            tf.gather(self.values, [tf.gather(index1, i)[0], tf.gather(index1, i)[self.d - 1]+1])
+            tf.gather(self.values, [tf.gather(index1, i)[0], tf.gather(index1, i)[self.d - 1] + 1])
         v1_ = tf_stack(T - self.d + 1, v1_body, v1_init, 2)
         v2_init = tf.gather(self.values, [T - self.d + 1, T])
         v2_body = lambda i: \
             tf.gather(self.values, [tf.gather(index2, i)[0], T])
         v2_ = tf_stack(self.d - 1, v2_body, v2_init, 2)
         v_ = tf.concat([v1_, v2_], axis=0)
-        v = tf.reduce_sum(v_ * gamma_t, axis=1)
-        value_loss = -tf.reduce_sum(self.consistency * v)
-        self.loss = pi_loss + value_loss
+        # v = tf.reduce_sum(v_ * gamma_t, axis=1)
+
+        # v_t_1_init = tf.gather(self.values, 0)
+        # v_t_1_body = lambda i:\
+        #     tf.gather(self.values, tf.gather(index1, i)[0])
+        # v_t_1 = tf_stack(T - self.d + 1, v_t_1_body, v_t_1_init, 1)
+        # v_t_2_init = tf.gather(self.values, 0)
+        # v_t_1_body = lambda i:\
+        #     tf.gather(self.values, tf.gather(index1, i)[0])
+        # v_t_1 = tf_stack(T - self.d + 1, v_t_1_body, v_t_1_init, 1)
+
+        v_t = self.values[:-1]
+        v_t_d1 = self.values[self.d:]
+        # v_t_d2 = tf.gather(self.values, [T]*(self.d-1))
+        v_t_d2 = tf.ones(self.d-1)*self.values[T]
+        # v_t_d2_init = tf.gather(self.values, [T - self.d + 1, T])
+        # v_t_d2_body = lambda i: tf.gather(self.values, [T])
+        # v_t_d2 = tf_stack(self.d - 1, v_t_d2_body, v_t_d2_init, 1)
+        v_t_d = tf.concat([v_t_d1, v_t_d2], axis=0)
+
+        self.hoge = [log_prob_tf, log_pi, self.action, self.pi.logits, log_pies, g]
+
+        # value_loss = -tf.reduce_sum(self.consistency * v)
+        # consistency = v + self.discounted_r - self.tau * g
+        consistency = - v_t + gamma*v_t_d + self.discounted_r - self.tau*g
+        self.loss = consistency**2
 
         opt = tf.train.AdamOptimizer(1e-4)
-        grad_theta_and_vars = opt.compute_gradients(pi_loss, pi.theta)
-        grad_phi_and_vars = opt.compute_gradients(value_loss, pi.phi)
+        opt_pi = tf.train.AdamOptimizer(7e-4)
+        opt_value = tf.train.AdamOptimizer(4e-4)
+        # grad_theta_and_vars = opt.compute_gradients(pi_loss, pi.theta)
+        # grad_phi_and_vars = opt.compute_gradients(value_loss, pi.phi)
+        # grads_and_vars = grad_theta_and_vars + grad_phi_and_vars
+        grad_theta_and_vars = opt.compute_gradients(self.loss, pi.theta)
+        grad_phi_and_vars = opt.compute_gradients(self.loss, pi.phi)
         grads_and_vars = grad_theta_and_vars + grad_phi_and_vars
         # grads, vars = list(zip(*grads_and_vars))
         # grads, _ = tf.clip_by_global_norm(grads, 40.0)
@@ -359,7 +406,9 @@ class PCL(object):
         self.summary_op = tf.summary.merge_all()
 
         # each worker has a different set of adam optimizer parameters
-        self.train_op = opt.apply_gradients(grads_and_vars)
+        # self.train_op = opt.apply_gradients(grads_and_vars)
+        self.train_op = [opt_pi.minimize(self.loss, var_list=pi.theta),
+                         opt_value.minimize(self.loss, var_list=pi.phi)]
         self.train_theta = opt.apply_gradients(grad_theta_and_vars)
         self.train_phi = opt.apply_gradients(grad_phi_and_vars)
 
@@ -396,7 +445,8 @@ class PCL(object):
             self.pi.x: batch.state,
             self.action: batch.action,
             self.consistency: batch.consistency,
-            self.reward : batch.reward
+            self.reward : batch.reward,
+            self.discounted_r : batch.discounted_r
         }
 
         if self.is_lstm:
@@ -404,10 +454,10 @@ class PCL(object):
             feed_dict[self.pi.state_in[1]] = batch.features[1]
 
         # fetches = [self.train_op, self.summary_op] if report else [self.train_op]
-        # fetches = [self.train_op, self.summary_op]\
-        #     if report or self.summary_writer is not None else [self.train_op]
-        fetches = [self.train_theta, self.train_phi, self.summary_op] \
-            if report or self.summary_writer is not None else [self.train_theta, self.train_phi]
+        fetches = self.train_op + [self.summary_op]\
+            if report or self.summary_writer is not None else self.train_op
+        # fetches = [self.train_theta, self.train_phi, self.summary_op] \
+        #     if report or self.summary_writer is not None else [self.train_theta, self.train_phi]
 
         fetched = sess.run(fetches, feed_dict=feed_dict)
 
