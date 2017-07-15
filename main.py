@@ -11,6 +11,7 @@ from argparse import ArgumentParser
 import scipy.signal
 
 from policy import LSTMPolicy, LinearPolicy
+from replay_buffer import ReplayBuffer
 
 
 def arg_parse():
@@ -307,11 +308,15 @@ class PCL(object):
         self.reward = tf.placeholder(tf.float32, name="reward")
         self.discounted_r = tf.placeholder(tf.float32, [None], name="discounted_r")
 
-        # log_prob_tf = tf.nn.log_softmax(self.pi.logits[:-1, :])
+        self.replay_buffer = ReplayBuffer()
+
         log_prob_tf = tf.log(self.pi.logits[:-1, :])
         log_pi = tf.reduce_sum(log_prob_tf * self.action, [1])
         T = tf.shape(self.action)[0]
         d = tf.cond(tf.constant(self.d) < T, lambda: tf.constant(self.d), lambda: T)
+
+        # Calculation of entropy for report
+        entropy = -tf.reduce_mean(tf.reduce_sum(log_prob_tf*self.pi.logits[:-1, :], axis=1))
 
         # Making sliding slice indexes
         body1 = lambda i: tf.range(self.d) + i
@@ -359,6 +364,7 @@ class PCL(object):
         v_t_d = tf.concat([v_t_d1, v_t_d2], axis=0)
 
         consistency = - v_t + gamma*v_t_d + self.discounted_r - self.tau*g
+        consistency = consistency[:T-d]
         self.loss = tf.pow(consistency, 2.0)
 
         opt_pi = tf.train.AdamOptimizer(7e-4)
@@ -384,7 +390,7 @@ class PCL(object):
         # each worker has a different set of adam optimizer parameters
         # self.train_op = opt.apply_gradients(grads_and_vars)
         self.train_op = [opt_pi.minimize(self.loss, var_list=pi.theta),
-                         opt_value.minimize(self.loss, var_list=pi.phi)]
+                         opt_value.minimize(self.loss, var_list=pi.phi), entropy]
 
     def pull_batch_from_queue(self):
         """
@@ -410,9 +416,30 @@ class PCL(object):
 
         # self.queue.put(rollout, timeout=1.0)
         # rollout = self.pull_batch_from_queue()
-        # In the too short step case
-        # if rollout.T <= self.d:
-        #     return
+
+        batch, fetched = self._process(rollout, report, sess)
+
+        # if should_compute_summary:
+        #     self.summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
+        #     self.summary_writer.flush()
+        if visualise or report:
+            d = self.d if self.d < rollout.T else rollout.T
+            loss = np.mean(batch.consistency ** 2)/d
+            entropy = fetched[2]
+            print("@{2}; reward : {0:.3}, loss : {1:.3}, entropy : {3:.3}".format(np.sum(rollout.rewards),
+                                                                loss, step, entropy))
+
+        self.replay_buffer.add(rollout)
+        if self.replay_buffer.trainable:
+            rollouts = self.replay_buffer.sample(5)
+            for rollout in rollouts:
+                batch, fetched = self._process(rollout, False, sess)
+
+        if self.summary_writer is not None:
+            self.summary_writer.add_summary(fetched[-1])
+        self.local_steps += 1
+
+    def _process(self, rollout, report, sess):
         batch = process_rollout(rollout, self.d, self.gamma, self.tau, lambda_=1.0)
 
         feed_dict = {
@@ -431,17 +458,7 @@ class PCL(object):
             if report or self.summary_writer is not None else self.train_op
 
         fetched = sess.run(fetches, feed_dict=feed_dict)
-
-        # if should_compute_summary:
-        #     self.summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
-        #     self.summary_writer.flush()
-        if visualise or report:
-            loss = np.mean(batch.consistency ** 2)
-            print("@{2}; reward : {0:.3}, loss : {1:.3}".format(np.sum(rollout.rewards),
-                                                                loss, step))
-        if self.summary_writer is not None:
-            self.summary_writer.add_summary(fetched[-1])
-        self.local_steps += 1
+        return batch, fetched
 
     def start(self, sess, summary_writer):
         self.summary_writer = summary_writer
