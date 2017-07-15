@@ -109,23 +109,26 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau):
 
     gammas = [gamma ** i for i in range(d)]
     r1 = np.vstack([rewards[i] for i in index1])
-    r2 = np.vstack([np.r_[rewards[i], np.zeros(d - i.size)] for i in index2])
-    r = np.vstack((r1, r2))
+    if 1 < T:
+        r2 = np.vstack([np.r_[rewards[i], np.zeros(d - i.size)] for i in index2])
+        r = np.vstack((r1, r2))
+    else:
+        r = r1
     discounted_r = r.dot(np.array(gammas))
 
-    # log pies
-    lp1 = np.vstack([log_pies[i] for i in index1])
-    lp2 = np.vstack([np.r_[log_pies[i], np.zeros(d - i.size)] for i in index2])
-    lp = np.vstack((lp1, lp2))
-    g = lp.dot(np.array(gammas))
-
-    exp = [d] * (T - d + 1) + [d - t - 1 for t in range(d - 1)]
-    gamma_d = np.power(gamma, exp)
-    v_ = np.vstack([values[[i[0], i[-1] + 1]] for i in index1 + index2])
-    v_t = np.array([values[i[0]] for i in index1 + index2])
-    v_t_d = np.array([values[i[-1]+1] for i in index1 + index2])
-    v = np.sum(v_*np.c_[-np.ones(T), gamma_d], axis=1)
-    return -v_t + gamma_d*v_t_d + discounted_r - tau*g, discounted_r
+    # # log pies
+    # lp1 = np.vstack([log_pies[i] for i in index1])
+    # lp2 = np.vstack([np.r_[log_pies[i], np.zeros(d - i.size)] for i in index2])
+    # lp = np.vstack((lp1, lp2))
+    # g = lp.dot(np.array(gammas))
+    #
+    # exp = [d] * (T - d + 1) + [d - t - 1 for t in range(d - 1)]
+    # gamma_d = np.power(gamma, exp)
+    # v_ = np.vstack([values[[i[0], i[-1] + 1]] for i in index1 + index2])
+    # v_t = np.array([values[i[0]] for i in index1 + index2])
+    # v_t_d = np.array([values[i[-1]+1] for i in index1 + index2])
+    # return -v_t + gamma_d*v_t_d + discounted_r - tau*g, discounted_r
+    return None, discounted_r
 
 
 Batch = namedtuple("Batch", ["state", "action", "consistency", "terminal", "features", "reward", "discounted_r"])
@@ -297,8 +300,8 @@ class PCL(object):
         else:
             self.pi = pi = LinearPolicy(env.observation_space, env.action_space)
         self.action = tf.placeholder(tf.float32, [None, pi.action_dim], name="action")
-        self.consistency = tf.placeholder(tf.float32, [None],
-                                          name="consistency")
+        # self.consistency = tf.placeholder(tf.float32, [None],
+        #                                   name="consistency")
         self.values = pi.values
         self.queue = queue.Queue(5)
         self.d = args.d
@@ -332,15 +335,18 @@ class PCL(object):
         init_m1 = tf.gather(log_pi, tf.gather(index1, 0))
         log_pies1 = tf_stack(tf.shape(index1)[0], log_body1, init_m1, d)
 
-        log_body2 = lambda i: \
-            tf.concat([tf.gather(log_pi, tf.gather(tf.gather(index2, i), tf.range(d - i - 1))),
-                       tf.zeros((i + 1,))
-                       ], 0)
+        if tf.constant(1) < T:
+            log_body2 = lambda i: \
+                tf.concat([tf.gather(log_pi, tf.gather(tf.gather(index2, i), tf.range(d - i - 1))),
+                           tf.zeros((i + 1,))
+                           ], 0)
 
-        init_m2 = tf.concat([tf.gather(log_pi, tf.gather(tf.gather(index2, 0), tf.range(d - 1))),
-                             tf.zeros(1)], axis=0)
-        log_pies2 = tf_stack(tf.shape(index2)[0], log_body2, init_m2, d)
-        log_pies = tf.concat([log_pies1, log_pies2], 0)
+            init_m2 = tf.concat([tf.gather(log_pi, tf.gather(tf.gather(index2, 0), tf.range(d - 1))),
+                                 tf.zeros(1)], axis=0)
+            log_pies2 = tf_stack(tf.shape(index2)[0], log_body2, init_m2, d)
+            log_pies = tf.concat([log_pies1, log_pies2], 0)
+        else:
+            log_pies = log_pies1
 
         # Calculation of pi loss
         gammas = tf.expand_dims(tf.pow(self.gamma, tf.cast(tf.range(d), tf.float32)), 1)
@@ -367,6 +373,8 @@ class PCL(object):
         consistency = consistency[:T-d]
         self.loss = tf.pow(consistency, 2.0)
 
+        self.hoge = [index2, log_pies2, log_pies, g, v_t, v_t_d, consistency]
+
         opt_pi = tf.train.AdamOptimizer(7e-4)
         opt_value = tf.train.AdamOptimizer(4e-4)
         opt = tf.train.AdamOptimizer(1e-4)
@@ -390,7 +398,8 @@ class PCL(object):
         # each worker has a different set of adam optimizer parameters
         # self.train_op = opt.apply_gradients(grads_and_vars)
         self.train_op = [opt_pi.minimize(self.loss, var_list=pi.theta),
-                         opt_value.minimize(self.loss, var_list=pi.phi), entropy]
+                         opt_value.minimize(self.loss, var_list=pi.phi)]
+        self.report = [entropy, self.loss]
 
     def pull_batch_from_queue(self):
         """
@@ -424,16 +433,17 @@ class PCL(object):
         #     self.summary_writer.flush()
         if visualise or report:
             d = self.d if self.d < rollout.T else rollout.T
-            loss = np.mean(batch.consistency ** 2)/d
+            loss = fetched[3]
+            loss = np.mean(loss)/d
             entropy = fetched[2]
             print("@{2}; reward : {0:.3}, loss : {1:.3}, entropy : {3:.3}".format(np.sum(rollout.rewards),
                                                                 loss, step, entropy))
 
-        self.replay_buffer.add(rollout)
-        if self.replay_buffer.trainable:
-            rollouts = self.replay_buffer.sample(5)
-            for rollout in rollouts:
-                batch, fetched = self._process(rollout, False, sess)
+        # self.replay_buffer.add(rollout)
+        # if self.replay_buffer.trainable:
+        #     rollouts = self.replay_buffer.sample(5)
+        #     for rollout in rollouts:
+        #         batch, fetched = self._process(rollout, False, sess)
 
         if self.summary_writer is not None:
             self.summary_writer.add_summary(fetched[-1])
@@ -445,7 +455,7 @@ class PCL(object):
         feed_dict = {
             self.pi.x: batch.state,
             self.action: batch.action,
-            self.consistency: batch.consistency,
+            # self.consistency: batch.consistency,
             self.reward : batch.reward,
             self.discounted_r : batch.discounted_r
         }
@@ -454,7 +464,7 @@ class PCL(object):
             feed_dict[self.pi.state_in[0]] = batch.features[0]
             feed_dict[self.pi.state_in[1]] = batch.features[1]
 
-        fetches = self.train_op + [self.summary_op]\
+        fetches = self.train_op + self.report + [self.summary_op]\
             if report or self.summary_writer is not None else self.train_op
 
         fetched = sess.run(fetches, feed_dict=feed_dict)
