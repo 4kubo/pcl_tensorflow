@@ -87,12 +87,15 @@ class LSTMPolicy(object):
             lstm_c, lstm_h = lstm_state
             x = tf.reshape(lstm_outputs, [-1, size])
 
-        last = relu(x, self.action_dim, "theta", normalized_columns_initializer(0.01))
-        self.logits = tf.nn.softmax(last, name="theta/softmax")
-        self.values = tf.reshape(relu(x, 1, "phi", normalized_columns_initializer(1.0)), [-1])
+        with tf.variable_scope("theta"):
+            hidden_theta = relu(x, 50, "dense_0")
+            last = relu(hidden_theta, self.action_dim, "dense_1")
+            self.logits = tf.nn.softmax(last, name="softmax")
+
+        with tf.variable_scope("phi"):
+            hidden_phi = relu(x, 50, "dense_0")
+            self.values = tf.reshape(relu(hidden_phi, 1, "dense_1"), [-1])
         self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
-        # one-hot vector
-        # self.sample = categorical_sample(self.logits, self.action_dim)[0, :]
         common_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "common")
         self.theta = common_var + tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
         self.phi = common_var + tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "phi")
@@ -102,8 +105,6 @@ class LSTMPolicy(object):
 
     def act(self, state, c, h):
         sess = tf.get_default_session()
-        # return sess.run([self.logits, self.sample, self.values, self.state_out],
-        #                 {self.x: [state], self.state_in[0]: c, self.state_in[1]: h})
         return sess.run([self.logits, self.values, self.state_out],
                         {self.x: [state], self.state_in[0]: c, self.state_in[1]: h})
 
@@ -130,8 +131,6 @@ class LinearPolicy(object):
         with tf.variable_scope("phi"):
             hidden_v = relu(x, 50, "hidden0")
             self.values = tf.reshape(relu(hidden_v, 1, "value"), [-1])
-                                            # normalized_columns_initializer(1.0)), [-1])
-        # self.sample = categorical_sample(self.logits, self.action_dim)[0, :]
 
         # Collecting trainable variables
         common_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "common")
