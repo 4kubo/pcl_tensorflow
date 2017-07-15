@@ -112,9 +112,9 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau):
     if 1 < T:
         r2 = np.vstack([np.r_[rewards[i], np.zeros(d - i.size)] for i in index2])
         r = np.vstack((r1, r2))
+        discounted_r = r.dot(np.array(gammas))
     else:
-        r = r1
-    discounted_r = r.dot(np.array(gammas))
+        discounted_r = np.array([rewards[0]])
 
     # # log pies
     # lp1 = np.vstack([log_pies[i] for i in index1])
@@ -335,18 +335,15 @@ class PCL(object):
         init_m1 = tf.gather(log_pi, tf.gather(index1, 0))
         log_pies1 = tf_stack(tf.shape(index1)[0], log_body1, init_m1, d)
 
-        if tf.constant(1) < T:
-            log_body2 = lambda i: \
-                tf.concat([tf.gather(log_pi, tf.gather(tf.gather(index2, i), tf.range(d - i - 1))),
-                           tf.zeros((i + 1,))
-                           ], 0)
+        log_body2 = lambda i: \
+            tf.concat([tf.gather(log_pi, tf.gather(tf.gather(index2, i), tf.range(d - i - 1))),
+                       tf.zeros((i + 1,))
+                       ], 0)
 
-            init_m2 = tf.concat([tf.gather(log_pi, tf.gather(tf.gather(index2, 0), tf.range(d - 1))),
-                                 tf.zeros(1)], axis=0)
-            log_pies2 = tf_stack(tf.shape(index2)[0], log_body2, init_m2, d)
-            log_pies = tf.concat([log_pies1, log_pies2], 0)
-        else:
-            log_pies = log_pies1
+        init_m2 = tf.concat([tf.gather(log_pi, tf.gather(tf.gather(index2, 0), tf.range(d - 1))),
+                             tf.zeros(1)], axis=0)
+        log_pies2 = tf_stack(tf.shape(index2)[0], log_body2, init_m2, d)
+        log_pies = tf.cond(1 < T, lambda: tf.concat([log_pies1, log_pies2], 0), lambda: log_pies1)
 
         # Calculation of pi loss
         gammas = tf.expand_dims(tf.pow(self.gamma, tf.cast(tf.range(d), tf.float32)), 1)
@@ -361,19 +358,16 @@ class PCL(object):
                                           (1, 1))
         gamma_init = tf.pow(self.gamma, tf.cast(d - 1, tf.float32))
         gamma_t2 = tf_stack(d - 1, gamma_body, gamma_init, 1)
-        gamma = tf.concat([gamma_t1, gamma_t2], axis=0)
-        gamma = tf.squeeze(gamma, axis=1)
+        gamma = tf.cond(1 < T, lambda: tf.squeeze(tf.concat([gamma_t1, gamma_t2], axis=0), axis=1),
+                        lambda: tf.constant(self.gamma))
 
         v_t = self.values[:-1]
         v_t_d1 = self.values[d:]
         v_t_d2 = tf.ones((d-1,))*self.values[T]
-        v_t_d = tf.concat([v_t_d1, v_t_d2], axis=0)
+        v_t_d = tf.cond(1 < T, lambda: tf.concat([v_t_d1, v_t_d2], axis=0), lambda: self.values[1:2])
 
         consistency = - v_t + gamma*v_t_d + self.discounted_r - self.tau*g
-        consistency = consistency[:T-d]
         self.loss = tf.pow(consistency, 2.0)
-
-        self.hoge = [index2, log_pies2, log_pies, g, v_t, v_t_d, consistency]
 
         opt_pi = tf.train.AdamOptimizer(7e-4)
         opt_value = tf.train.AdamOptimizer(4e-4)
@@ -439,11 +433,11 @@ class PCL(object):
             print("@{2}; reward : {0:.3}, loss : {1:.3}, entropy : {3:.3}".format(np.sum(rollout.rewards),
                                                                 loss, step, entropy))
 
-        # self.replay_buffer.add(rollout)
-        # if self.replay_buffer.trainable:
-        #     rollouts = self.replay_buffer.sample(5)
-        #     for rollout in rollouts:
-        #         batch, fetched = self._process(rollout, False, sess)
+        self.replay_buffer.add(rollout)
+        if self.replay_buffer.trainable:
+            rollouts = self.replay_buffer.sample(50)
+            for rollout in rollouts:
+                batch, fetched = self._process(rollout, False, sess)
 
         if self.summary_writer is not None:
             self.summary_writer.add_summary(fetched[-1])
