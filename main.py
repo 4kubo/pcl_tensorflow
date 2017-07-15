@@ -243,7 +243,7 @@ def env_runner(sess, env, policy, max_step_per_episode,
             env.render()
 
         # collect the experience
-        rollout.add(last_state, log_pi, action, reward, value, terminal, last_features)
+        rollout.add(state, log_pi, action, reward, value, terminal, last_features)
 
         episode_reward += reward
         last_state = state
