@@ -16,8 +16,7 @@ from replay_buffer import ReplayBuffer
 
 def arg_parse():
     parser = ArgumentParser()
-    parser.add_argument("-v", "--visualise",
-                        action="store_true")
+    # Hyper parameters
     parser.add_argument("-s", "--n_total_step",
                         type=int,
                         default=10000)
@@ -33,6 +32,12 @@ def arg_parse():
     parser.add_argument("--task",
                         type=int,
                         default=0)
+    parser.add_argument("-b", "--batch_size",
+                        type=int,
+                        default=100)
+    # Configulation
+    parser.add_argument("-v", "--visualise",
+                        action="store_true")
     parser.add_argument("--logdir",
                         type=str,
                         default="/tmp/pcl")
@@ -58,6 +63,10 @@ def main(_):
     args = arg_parse()
 
     env = gym.make(args.target_task)
+    # For saving video
+    if args.visualise and args.save_model is not None:
+        from gym import wrappers
+        env = wrappers.Monitor(env, args.logdir, force=True)
     args.max_step_per_episode = env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')
 
     total_step = 0
@@ -73,6 +82,7 @@ def main(_):
             if args.summary else None
         sess.run(init_all_op)
         model.start(sess, summary_writer)
+        # Restoring a model
         if args.restore_model is not None:
             ckpt = tf.train.get_checkpoint_state(args.restore_model)
             if ckpt:
@@ -81,7 +91,7 @@ def main(_):
             else:
                 print("Does not exist : {}".format(ckpt.model_checkpoint_path))
 
-        # env = wrappers.Monitor(env, "/Users/kubo-a/tmp/cart")
+        # Main loop
         while total_step <= args.n_total_step:
             if args.visualise:
                 visualise = True if total_step % 1000 == 0 else False
@@ -94,7 +104,8 @@ def main(_):
                                global_step=total_step)
             else:
                 report = False
-            model.process(sess, total_step, visualise, report, is_lstm=args.is_lstm)
+            model.process(sess, total_step, visualise, report,
+                          is_lstm=args.is_lstm, batch_size=args.batch_size)
             total_step += 1
 
 def discount(x, gamma):
@@ -408,7 +419,7 @@ class PCL(object):
                 break
         return rollout
 
-    def process(self, sess, step, visualise, report, is_lstm=False):
+    def process(self, sess, step, visualise, report, is_lstm=False, batch_size=100):
         """
         process grabs a rollout that's been produced by the thread runner,
         and updates the parameters.  The update is then sent to the parameter
@@ -435,7 +446,7 @@ class PCL(object):
 
         self.replay_buffer.add(rollout)
         if self.replay_buffer.trainable:
-            rollouts = self.replay_buffer.sample(50)
+            rollouts = self.replay_buffer.sample(batch_size)
             for rollout in rollouts:
                 batch, fetched = self._process(rollout, False, sess)
 
@@ -469,4 +480,9 @@ class PCL(object):
 
 
 if __name__ == "__main__":
+    args = arg_parse()
+    if args.visualise:
+        env = gym.make("CartPole-v0")
+        env.reset()
+        env.render()
     tf.app.run()
