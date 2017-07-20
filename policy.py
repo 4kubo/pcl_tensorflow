@@ -159,6 +159,16 @@ def get_action_space(action_space):
             return np.unravel_index(action.argmax(), action_space_dims)
 
         return action_space_dim, action_decoder
+    # For Pendulum
+    elif isinstance(action_space, gym.spaces.box.Box)\
+        and action_space.shape == (1,):
+        print("action space : Box(1,)")
+        action_space_dim = 20
+        bins = np.linspace(action_space.low, action_space.high, action_space_dim)
+
+        def action_decoder(action):
+            return np.array([bins[action.argmax()]])
+        return action_space_dim, action_decoder
     else:
         action_space_dim = action_space.n
 
