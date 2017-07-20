@@ -1,6 +1,8 @@
 import pyglet
 import gym
-# from gym import wrappers
+env = gym.make("CartPole-v0")
+env.reset()
+env.render()
 from collections import namedtuple
 import numpy as np
 import tensorflow as tf
@@ -480,9 +482,4 @@ class PCL(object):
 
 
 if __name__ == "__main__":
-    args = arg_parse()
-    if args.visualise:
-        env = gym.make("CartPole-v0")
-        env.reset()
-        env.render()
     tf.app.run()
