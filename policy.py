@@ -61,6 +61,7 @@ class LSTMPolicy(object):
             self.x, x = preprocess_observation_space(ob_space)
             # introduce a "fake" batch dimension of 1 after flatten so that
             #  we can do LSTM over time dim
+            # x is converted in shape of [1, time step, ob_space]
             x = tf.expand_dims(x, [0])
 
             if use_tf100_api:
@@ -70,6 +71,7 @@ class LSTMPolicy(object):
             self.state_size = lstm.state_size
             step_size = tf.shape(self.x)[:1]
 
+            # batch size is always 1
             c_init = np.zeros((1, lstm.state_size.c), np.float32)
             h_init = np.zeros((1, lstm.state_size.h), np.float32)
             self.state_init = [c_init, h_init]
@@ -85,7 +87,7 @@ class LSTMPolicy(object):
                 lstm, x, initial_state=state_in, sequence_length=step_size,
                 time_major=False)
             lstm_c, lstm_h = lstm_state
-            x = tf.reshape(lstm_outputs, [-1, size])
+            x = tf.squeeze(lstm_outputs, axis=0)
 
         with tf.variable_scope("theta"):
             hidden_theta = relu(x, 50, "dense_0")
