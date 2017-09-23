@@ -97,7 +97,7 @@ class LSTMPolicy(object):
         with tf.variable_scope("phi"):
             hidden_phi = relu(x, 50, "dense_0")
             self.values = tf.reshape(relu(hidden_phi, 1, "dense_1"), [-1])
-        self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
+        self.features = [lstm_c[:1, :], lstm_h[:1, :]]
         common_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "common")
         self.theta = common_var + tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
         self.phi = common_var + tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "phi")
@@ -107,12 +107,13 @@ class LSTMPolicy(object):
 
     def act(self, state, c, h):
         sess = tf.get_default_session()
-        return sess.run([self.logits, self.values, self.state_out],
+        return sess.run({"logits": self.logits, "state_out": self.features},
                         {self.x: [state], self.state_in[0]: c, self.state_in[1]: h})
 
     def value(self, ob, c, h):
         sess = tf.get_default_session()
-        return sess.run(self.values, {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})[0]
+        return sess.run(self.values,
+                        {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})[0]
 
 
 class LinearPolicy(object):
@@ -144,11 +145,11 @@ class LinearPolicy(object):
 
     def act(self, state, *_):
         sess = tf.get_default_session()
-        return sess.run([self.logits, self.values], {self.x: [state]})
+        return sess.run({"logits": self.logits, "values": self.values}, {self.x: [state]})
 
     def value(self, state, *_):
         sess = tf.get_default_session()
-        return sess.run(self.values, {self.x: [state]})[0]
+        return sess.run(self.values, {self.x: [state]})
 
 
 def get_action_space(action_space):

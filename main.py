@@ -234,7 +234,7 @@ def env_runner(sess, env, policy, max_step_per_episode,
     if visualize:
         env.render()
     last_features = policy.get_initial_features()
-    initial_value = policy.value(last_state, *last_features)
+    initial_value = policy.value(last_state, *last_features)[0]
     step = 0
     episode_reward = 0
     terminal_end = False
@@ -245,14 +245,14 @@ def env_runner(sess, env, policy, max_step_per_episode,
         step += 1
 
         fetches = policy.act(last_state, *last_features)
-        action_logit, value_ = fetches[0], fetches[1:]
-        value = value_[0]
+        action_logit = fetches["logits"]
         if is_lstm:
-            features = value_[1]
+            features = fetches["features"]
         log_pi, action = sample_log_pi(action_logit, policy.action_dim)
         # argmax to convert from one-hot
         action_code = policy.action_decoder(action)
         state, reward, terminal, info = env.step(action_code)
+        value = policy.value(state, *features)[0]
         if visualize:
             env.render()
 
@@ -344,7 +344,7 @@ class PCL(object):
 
         log_body1 = lambda i: tf.gather(log_pi, tf.gather(index1, i))
         init_m1 = tf.gather(log_pi, tf.gather(index1, 0))
-        log_pies1 = tf_stack(tf.shape(index1)[0], log_body1, init_m1, d)
+        log_pies1 = tf_stack(T - d + 1, log_body1, init_m1, d)
 
         log_body2 = lambda i: \
             tf.concat([tf.gather(log_pi, tf.gather(tf.gather(index2, i), tf.range(d - i - 1))),
@@ -353,7 +353,8 @@ class PCL(object):
 
         init_m2 = tf.concat([tf.gather(log_pi, tf.gather(tf.gather(index2, 0), tf.range(d - 1))),
                              tf.zeros(1)], axis=0)
-        log_pies2 = tf_stack(tf.shape(index2)[0], log_body2, init_m2, d)
+        log_pies2 = tf_stack(d - 1, log_body2, init_m2, d)
+        # In shape (T, d)
         log_pies = tf.cond(1 < T, lambda: tf.concat([log_pies1, log_pies2], 0), lambda: log_pies1)
 
         # Calculation of pi loss
@@ -375,6 +376,7 @@ class PCL(object):
         v_t = self.values[:-1]
         v_t_d1 = self.values[d:]
         v_t_d2 = tf.ones((d-1,))*self.values[T]
+        # If `T` is 1, `v_t_d` is composed only of last element of `values`, and `v_t_d2` is empty
         v_t_d = tf.cond(1 < T, lambda: tf.concat([v_t_d1, v_t_d2], axis=0), lambda: self.values[1:2])
 
         consistency = - v_t + gamma*v_t_d + self.discounted_r - self.tau*g
@@ -402,8 +404,8 @@ class PCL(object):
 
         # each worker has a different set of adam optimizer parameters
         # self.train_op = opt.apply_gradients(grads_and_vars)
-        self.train_op = [opt_pi.minimize(self.loss, var_list=pi.theta),
-                         opt_value.minimize(self.loss, var_list=pi.phi)]
+        self.train_op = [opt_value.minimize(self.loss, var_list=pi.phi),
+                         opt_pi.minimize(self.loss, var_list=pi.theta)]
         self.report = [entropy, self.loss]
 
     def pull_batch_from_queue(self):
