@@ -1,8 +1,4 @@
-import pyglet
 import gym
-env = gym.make("CartPole-v0")
-env.reset()
-env.render()
 from collections import namedtuple
 import numpy as np
 import tensorflow as tf
@@ -96,7 +92,7 @@ def main(_):
         # Main loop
         while total_step <= args.n_total_step:
             if args.visualise:
-                visualise = True if total_step % 1000 == 0 else False
+                visualise = True if total_step % 100 == 0 else False
             else:
                 visualise = False
             if total_step % 100 == 0:
@@ -235,6 +231,8 @@ def env_runner(sess, env, policy, max_step_per_episode,
     runner appends the policy to the queue.
     """
     last_state = env.reset()
+    if visualize:
+        env.render()
     last_features = policy.get_initial_features()
     initial_value = policy.value(last_state, *last_features)
     step = 0
