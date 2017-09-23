@@ -84,7 +84,7 @@ class LSTMPolicy(object):
             else:
                 state_in = rnn.rnn_cell.LSTMStateTuple(c_in, h_in)
             lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
-                lstm, x, initial_state=state_in, sequence_length=step_size,
+                lstm, x, initial_state=state_in,
                 time_major=False)
             lstm_c, lstm_h = lstm_state
             x = tf.squeeze(lstm_outputs, axis=0)
