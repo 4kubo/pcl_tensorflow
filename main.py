@@ -403,23 +403,12 @@ class PCL(object):
         self.hoge = [consistency, v_t, v_t_d, g]
 
         self.loss = tf.pow(consistency, 2.0)
-        self.pi_loss = tf.reduce_sum(self.consistency * g)
-        self.v_loss = tf.reduce_sum(self.consistency*(v_t - gamma*v_t_d))
+        self.pi_loss = -tf.reduce_sum(self.consistency * g)
+        self.v_loss = -tf.reduce_sum(self.consistency*(v_t - gamma*v_t_d))
 
         opt_pi = tf.train.AdamOptimizer(7e-4)
         opt_value = tf.train.AdamOptimizer(4e-4)
         opt = tf.train.AdamOptimizer(1e-4)
-        # grad_theta_and_vars = opt.compute_gradients(pi_loss, pi.theta)
-        # grad_phi_and_vars = opt.compute_gradients(value_loss, pi.phi)
-        # grads_and_vars = grad_theta_and_vars + grad_phi_and_vars
-        # grad_theta_and_vars = opt.compute_gradients(self.loss, pi.theta)
-        # grad_phi_and_vars = opt.compute_gradients(self.loss, pi.phi)
-        # grads_and_vars = grad_theta_and_vars + grad_phi_and_vars
-        # grads, vars = list(zip(*grads_and_vars))
-        # grads, _ = tf.clip_by_global_norm(grads, 40.0)
-        # grads_and_vars = list(zip(grads, vars))
-        # self.train_theta = opt.apply_gradients(grad_theta_and_vars)
-        # self.train_phi = opt.apply_gradients(grad_phi_and_vars)
 
         tf.summary.scalar("loss", tf.divide(tf.reduce_sum(self.loss, axis=0),
                                             tf.cast(T*self.d, tf.float32)))
@@ -427,9 +416,9 @@ class PCL(object):
         self.summary_op = tf.summary.merge_all()
 
         # each worker has a different set of adam optimizer parameters
-        self.train_op = [opt_value.minimize(self.v_loss, var_list=pi.phi),
-                         opt_pi.minimize(self.pi_loss, var_list=pi.theta)]
-        self.report = [entropy, self.loss]
+        self.train_op = [opt_pi.minimize(self.pi_loss, var_list=pi.theta),
+                         opt_value.minimize(self.v_loss, var_list=pi.phi)]
+        self.report = {"entropy": entropy, "loss": self.loss}
 
     def pull_batch_from_queue(self):
         """
@@ -463,11 +452,12 @@ class PCL(object):
         #     self.summary_writer.flush()
         if visualise or report:
             d = self.d if self.d < rollout.T else rollout.T
-            loss = fetched[3]
+            loss = fetched["report"]["loss"]
             loss = np.mean(loss)/d
-            entropy = fetched[2]
-            print("@{2}; reward : {0:.3}, loss : {1:.3}, entropy : {3:.3}".format(np.sum(rollout.rewards),
-                                                                loss, step, entropy))
+            entropy = fetched["report"]["entropy"]
+            print("@{2}; reward : {0:.3}, loss : {1:.3}, entropy : {3:.3}"
+                  .format(np.sum(rollout.rewards), loss, step, entropy))
+
 
         self.replay_buffer.add(rollout)
         if self.replay_buffer.trainable:
@@ -494,8 +484,10 @@ class PCL(object):
             feed_dict[self.pi.state_in[0]] = batch.features[0]
             feed_dict[self.pi.state_in[1]] = batch.features[1]
 
-        fetches = self.train_op + self.report + [self.summary_op]\
-            if report or self.summary_writer is not None else self.train_op
+        fetches = {"train_op": self.train_op}
+        if report or self.summary_writer is not None:
+            fetches["report"] = self.report
+            fetches["summary_op"] = self.summary_op
 
         fetched = sess.run(fetches, feed_dict=feed_dict)
         return batch, fetched
