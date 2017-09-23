@@ -406,7 +406,7 @@ class PCL(object):
         # self.train_op = opt.apply_gradients(grads_and_vars)
         self.train_op = [opt_value.minimize(self.loss, var_list=pi.phi),
                          opt_pi.minimize(self.loss, var_list=pi.theta)]
-        self.report = [entropy, self.loss]
+        self.report = {"entropy": entropy, "loss": self.loss}
 
     def pull_batch_from_queue(self):
         """
@@ -440,9 +440,9 @@ class PCL(object):
         #     self.summary_writer.flush()
         if visualise or report:
             d = self.d if self.d < rollout.T else rollout.T
-            loss = fetched[3]
+            loss = fetched["report"]["loss"]
             loss = np.mean(loss)/d
-            entropy = fetched[2]
+            entropy = fetched["report"]["entropy"]
             print("@{2}; reward : {0:.3}, loss : {1:.3}, entropy : {3:.3}".format(np.sum(rollout.rewards),
                                                                 loss, step, entropy))
 
@@ -471,8 +471,10 @@ class PCL(object):
             feed_dict[self.pi.state_in[0]] = batch.features[0]
             feed_dict[self.pi.state_in[1]] = batch.features[1]
 
-        fetches = self.train_op + self.report + [self.summary_op]\
-            if report or self.summary_writer is not None else self.train_op
+        fetches = {"train_op": self.train_op}
+        if report or self.summary_writer is not None:
+            fetches["report"] = self.report
+            fetches["summary_op"] = self.summary_op
 
         fetched = sess.run(fetches, feed_dict=feed_dict)
         return batch, fetched

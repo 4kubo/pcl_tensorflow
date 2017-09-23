@@ -107,13 +107,13 @@ class LSTMPolicy(object):
 
     def act(self, state, c, h):
         sess = tf.get_default_session()
-        return sess.run({"logits": self.logits, "state_out": self.features},
+        return sess.run({"logits": self.logits, "features": self.features},
                         {self.x: [state], self.state_in[0]: c, self.state_in[1]: h})
 
     def value(self, ob, c, h):
         sess = tf.get_default_session()
         return sess.run(self.values,
-                        {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})[0]
+                        {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})
 
 
 class LinearPolicy(object):
