@@ -33,6 +33,9 @@ def arg_parse():
     parser.add_argument("-b", "--batch_size",
                         type=int,
                         default=100)
+    parser.add_argument("--clip_min",
+                        type=float,
+                        default=1e-10)
     # Configulation
     parser.add_argument("-v", "--visualise",
                         action="store_true")
@@ -210,7 +213,9 @@ def log_softmax(action_logit, one_hot_action):
     log_pi = log_distrib[0, one_hot_action.argmax()]
     return log_pi
 
-def sample_log_pi(action_logit, action_dim):
+def sample_log_pi(action_logit, action_dim, clip_min=1e-10):
+    # Clipping to avoid log 0
+    np.clip(action_logit, clip_min, 1.0, out=action_logit)
     action_logit = np.squeeze(action_logit, 0)
     sum_ = np.sum(action_logit)
     pi = action_logit / sum_
@@ -324,7 +329,7 @@ class PCL(object):
 
         self.replay_buffer = ReplayBuffer()
 
-        log_prob_tf = tf.log(self.pi.logits[:-1, :])
+        log_prob_tf = tf.log(tf.clip_by_value(self.pi.logits[:-1, :], args.clip_min, 1.0))
         log_pi = tf.reduce_sum(log_prob_tf * self.action, [1])
         T = tf.shape(self.action)[0]
         d = tf.cond(tf.constant(self.d) < T, lambda: tf.constant(self.d), lambda: T)
