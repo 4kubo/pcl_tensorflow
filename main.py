@@ -33,6 +33,9 @@ def arg_parse():
     parser.add_argument("-b", "--batch_size",
                         type=int,
                         default=100)
+    parser.add_argument("-c", "--critic_weight",
+                        type=float,
+                        default=0.1)
     parser.add_argument("--clip_min",
                         type=float,
                         default=1e-10)
@@ -330,6 +333,7 @@ class PCL(object):
         self.discounted_r = tf.placeholder(tf.float32, [None], name="discounted_r")
 
         self.replay_buffer = ReplayBuffer()
+        self.actor_learning_rate = 5e-3
 
         log_prob_tf = tf.log(tf.clip_by_value(self.pi.logits[:-1, :], args.clip_min, 1.0))
         log_pi = tf.reduce_sum(log_prob_tf * self.action, [1])
@@ -407,8 +411,8 @@ class PCL(object):
         self.pi_loss = -tf.reduce_sum(self.consistency * g)
         self.v_loss = -tf.reduce_sum(self.consistency*(v_t - gamma*v_t_d))
 
-        opt_pi = tf.train.AdamOptimizer(7e-4)
-        opt_value = tf.train.AdamOptimizer(4e-4)
+        opt_pi = tf.train.AdamOptimizer(self.actor_learning_rate)
+        opt_value = tf.train.AdamOptimizer(self.actor_learning_rate*args.critic_weight)
         opt = tf.train.AdamOptimizer(1e-4)
 
         tf.summary.scalar("loss", tf.divide(tf.reduce_sum(self.loss, axis=0),
@@ -467,7 +471,7 @@ class PCL(object):
                 batch, fetched = self._process(rollout, False, sess)
 
         if self.summary_writer is not None:
-            self.summary_writer.add_summary(fetched[-1])
+            self.summary_writer.add_summary(fetched["summary_op"])
         self.local_steps += 1
 
     def _process(self, rollout, report, sess):

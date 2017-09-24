@@ -69,7 +69,6 @@ class LSTMPolicy(object):
             else:
                 lstm = rnn.rnn_cell.BasicLSTMCell(size, state_is_tuple=True)
             self.state_size = lstm.state_size
-            step_size = tf.shape(self.x)[:1]
 
             # batch size is always 1
             c_init = np.zeros((1, lstm.state_size.c), np.float32)
