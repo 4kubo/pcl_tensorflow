@@ -129,7 +129,7 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau):
 
     gammas = [gamma ** i for i in range(d)]
     r1 = np.vstack([rewards[i] for i in index1])
-    if 1 < T:
+    if 1 < T and 1 < d:
         r2 = np.vstack([np.r_[rewards[i], np.zeros(d - i.size)] for i in index2])
         r = np.vstack((r1, r2))
         discounted_r = r.dot(np.array(gammas))
@@ -371,7 +371,7 @@ class PCL(object):
                              tf.zeros(1)], axis=0)
         log_pies2 = tf_stack(d - 1, log_body2, init_m2, d)
         # In shape (T, d)
-        log_pies = tf.cond(1 < T, lambda: tf.concat([log_pies1, log_pies2], 0), lambda: log_pies1)
+        log_pies = tf.cond(tf.logical_and(1 < T, 1 < d), lambda: tf.concat([log_pies1, log_pies2], 0), lambda: log_pies1)
 
         # Calculation of pi loss
         gammas = tf.expand_dims(tf.pow(self.gamma, tf.cast(tf.range(d), tf.float32)), 1)
@@ -386,14 +386,14 @@ class PCL(object):
                                           (1, 1))
         gamma_init = tf.pow(self.gamma, tf.cast(d - 1, tf.float32))
         gamma_t2 = tf_stack(d - 1, gamma_body, gamma_init, 1)
-        gamma = tf.cond(1 < T, lambda: tf.squeeze(tf.concat([gamma_t1, gamma_t2], axis=0), axis=1),
+        gamma = tf.cond(tf.logical_and(1 < T, 1 < d), lambda: tf.squeeze(tf.concat([gamma_t1, gamma_t2], axis=0), axis=1),
                         lambda: tf.constant(self.gamma))
 
         v_t = self.values[:-1]
         v_t_d1 = self.values[d:]
         v_t_d2 = tf.ones((d-1,))*self.values[T]
         # If `T` is 1, `v_t_d` is composed only of last element of `values`, and `v_t_d2` is empty
-        v_t_d = tf.cond(1 < T, lambda: tf.concat([v_t_d1, v_t_d2], axis=0), lambda: self.values[1:2])
+        v_t_d = tf.cond(tf.logical_and(1 < T, 1 < d), lambda: tf.concat([v_t_d1, v_t_d2], axis=0), lambda: self.values[1:2])
 
         consistency = - v_t + gamma * v_t_d + self.discounted_r - self.tau * g
 
