@@ -425,6 +425,11 @@ class PCL(object):
                          opt_value.minimize(self.v_loss, var_list=pi.phi)]
         self.report = {"entropy": entropy, "loss": self.loss}
 
+        tf.summary.scalar("loss", tf.divide(tf.reduce_sum(self.loss, axis=0),
+                                            tf.cast(T*self.d, tf.float32)))
+        tf.summary.scalar("reward", self.reward)
+        self.summary_op = tf.summary.merge_all()
+
     def pull_batch_from_queue(self):
         """
         self explanatory:  take a rollout from the queue of the thread runner.
@@ -450,7 +455,7 @@ class PCL(object):
         # self.queue.put(rollout, timeout=1.0)
         # rollout = self.pull_batch_from_queue()
 
-        batch, fetched = self._process(rollout, report, sess)
+        batch, fetched = self.train(rollout, report, sess)
 
         # if should_compute_summary:
         #     self.summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
@@ -474,7 +479,7 @@ class PCL(object):
             self.summary_writer.add_summary(fetched["summary_op"])
         self.local_steps += 1
 
-    def _process(self, rollout, report, sess):
+    def train(self, rollout, report, sess):
         batch = process_rollout(rollout, self.d, self.gamma, self.tau, lambda_=1.0)
 
         feed_dict = {
