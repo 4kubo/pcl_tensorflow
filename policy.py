@@ -90,11 +90,16 @@ class LSTMPolicy(object):
 
         with tf.variable_scope("theta"):
             hidden_theta = relu(x, 50, "dense_0")
+            i = 0
+            for i in range(0):
+                hidden_theta = relu(hidden_theta, 50, "hidden{}".format(i+1))
             last = relu(hidden_theta, self.action_dim, "dense_1")
             self.logits = tf.nn.softmax(last, name="softmax")
 
         with tf.variable_scope("phi"):
             hidden_phi = relu(x, 50, "dense_0")
+            for i in range(0):
+                hidden_phi = relu(hidden_phi, 50, "hidden{}".format(i+1))
             self.values = tf.reshape(relu(hidden_phi, 1, "dense_1"), [-1])
         self.features = [lstm_c[:1, :], lstm_h[:1, :]]
         common_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "common")
@@ -125,13 +130,16 @@ class LinearPolicy(object):
 
         with tf.variable_scope("theta"):
             hidden_pi = relu(x, 50, "hidden0")
-            hidden_pi = relu(hidden_pi, self.action_dim, "hidden1")
+            i = 0
+            for i in range(0):
+                hidden_pi = relu(hidden_pi, 50, "hidden{}".format(i+1))
+            hidden_pi = relu(hidden_pi, self.action_dim, "hidden{}".format(i+1))
             self.logits = tf.nn.softmax(hidden_pi, name="softmax")
-            # self.logits = relu(hidden_pi, self.action_dim, "theta",
-            #                      normalized_columns_initializer(0.01))
 
         with tf.variable_scope("phi"):
             hidden_v = relu(x, 50, "hidden0")
+            for i in range(0):
+                hidden_v = relu(hidden_v, 50, "hidden{}".format(i+1))
             self.values = tf.reshape(relu(hidden_v, 1, "value"), [-1])
 
         # Collecting trainable variables

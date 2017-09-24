@@ -42,6 +42,9 @@ def arg_parse():
     # Configulation
     parser.add_argument("-v", "--visualise",
                         action="store_true")
+    parser.add_argument("--step_to_report",
+                        type=int,
+                        default=100)
     parser.add_argument("--logdir",
                         type=str,
                         default="/tmp/pcl")
@@ -72,6 +75,8 @@ def main(_):
         from gym import wrappers
         env = wrappers.Monitor(env, args.logdir, force=True)
     args.max_step_per_episode = env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')
+    if args.max_step_per_episode is None:
+        args.max_step_per_episode = env.spec.max_episode_steps
 
     total_step = 0
 
@@ -98,10 +103,10 @@ def main(_):
         # Main loop
         while total_step <= args.n_total_step:
             if args.visualise:
-                visualise = True if total_step % 100 == 0 else False
+                visualise = True if total_step % args.step_to_report == 0 else False
             else:
                 visualise = False
-            if total_step % 100 == 0:
+            if total_step % args.step_to_report == 0:
                 report = True
                 if args.save_model is not None:
                     saver.save(sess, args.save_model + "/pcl_model.ckpt",
@@ -473,7 +478,7 @@ class PCL(object):
         if self.replay_buffer.trainable:
             rollouts = self.replay_buffer.sample(batch_size)
             for rollout in rollouts:
-                batch, fetched = self._process(rollout, False, sess)
+                batch, fetched = self.train(rollout, False, sess)
 
         if self.summary_writer is not None:
             self.summary_writer.add_summary(fetched["summary_op"])
