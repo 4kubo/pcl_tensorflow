@@ -65,17 +65,17 @@ class LSTMPolicy(object):
             x = tf.expand_dims(x, [0])
 
             if use_tf100_api:
-                lstm = rnn.BasicLSTMCell(size, state_is_tuple=True)
+                cell = rnn.BasicLSTMCell(size, state_is_tuple=True)
             else:
-                lstm = rnn.rnn_cell.BasicLSTMCell(size, state_is_tuple=True)
-            self.state_size = lstm.state_size
+                cell = rnn.rnn_cell.BasicLSTMCell(size, state_is_tuple=True)
+            self.state_size = cell.state_size
 
             # batch size is always 1
-            c_init = np.zeros((1, lstm.state_size.c), np.float32)
-            h_init = np.zeros((1, lstm.state_size.h), np.float32)
+            c_init = np.zeros((1, cell.state_size.c), np.float32)
+            h_init = np.zeros((1, cell.state_size.h), np.float32)
             self.state_init = [c_init, h_init]
-            c_in = tf.placeholder(tf.float32, [1, lstm.state_size.c])
-            h_in = tf.placeholder(tf.float32, [1, lstm.state_size.h])
+            c_in = tf.placeholder(tf.float32, [1, cell.state_size.c])
+            h_in = tf.placeholder(tf.float32, [1, cell.state_size.h])
             self.state_in = [c_in, h_in]
 
             if use_tf100_api:
@@ -83,7 +83,7 @@ class LSTMPolicy(object):
             else:
                 state_in = rnn.rnn_cell.LSTMStateTuple(c_in, h_in)
             lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
-                lstm, x, initial_state=state_in,
+                cell, x, initial_state=state_in,
                 time_major=False)
             lstm_c, lstm_h = lstm_state
             x = tf.squeeze(lstm_outputs, axis=0)
@@ -98,7 +98,7 @@ class LSTMPolicy(object):
 
         with tf.variable_scope("phi"):
             hidden_phi = relu(x, 50, "dense_0")
-            for i in range(0):
+            for i in range(1):
                 hidden_phi = relu(hidden_phi, 50, "hidden{}".format(i+1))
             self.values = tf.reshape(relu(hidden_phi, 1, "dense_1"), [-1])
         self.features = [lstm_c[:1, :], lstm_h[:1, :]]
