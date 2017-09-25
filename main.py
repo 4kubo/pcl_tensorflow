@@ -313,30 +313,32 @@ class PCL(object):
         self.local_steps = 0
         self.replay_buffer = ReplayBuffer()
 
+        # The length of one episode
         T = tf.shape(self.action)[0]
         d = tf.cond(tf.constant(self.d) < T, lambda: tf.constant(self.d), lambda: T)
-
         # Calculate log pi from sampled actions
         log_prob_tf = tf.log(tf.clip_by_value(self.pi.logits[:-1, :], args.clip_min, 1.0))
         log_pi = tf.reduce_sum(log_prob_tf * self.action, [1])
-
+        # Discounted action distribution
         g = tf.reshape(tf.matmul(self.discount_m, log_pi[:, None]), [-1])
         # Discounted values
         discounted_values = tf.reshape(tf.matmul(self.value_m, self.values[:, None]), [-1])
         # Path Consistency
         consistency = discounted_values + self.discounted_r - g
 
-        # Calculation of losses
-        self.pi_loss = tf.reduce_sum(-self.consistency*g)
-        self.v_loss = tf.reduce_sum(self.consistency*discounted_values)
-
         # Calculation of entropy for report
         entropy = -tf.reduce_mean(tf.reduce_sum(log_prob_tf*self.pi.logits[:-1, :], axis=1))
 
+        # Calculation of losses
+        self.pi_loss = tf.reduce_sum(-self.consistency*g)
+        self.v_loss = tf.reduce_sum(self.consistency*discounted_values)
         self.loss = tf.pow(consistency, 2.0)
+
+        # Optimizer for policy and value function
         opt_pi = tf.train.AdamOptimizer(args.actor_learning_rate)
         opt_value = tf.train.AdamOptimizer(args.actor_learning_rate*args.critic_weight)
 
+        # Summary
         tf.summary.scalar("loss", tf.divide(tf.reduce_sum(self.loss, axis=0),
                                             tf.cast(T*self.d, tf.float32)))
         tf.summary.scalar("reward", self.reward)
@@ -346,10 +348,6 @@ class PCL(object):
         self.train_op = [opt_pi.minimize(self.pi_loss, var_list=pi.theta),
                          opt_value.minimize(self.v_loss, var_list=pi.phi)]
         self.report = {"entropy": entropy, "loss": self.loss}
-
-        tf.summary.scalar("loss", tf.divide(tf.reduce_sum(self.loss, axis=0),
-                                            tf.cast(T*d, tf.float32)))
-        tf.summary.scalar("reward", self.reward)
         self.summary_op = tf.summary.merge_all()
 
     def pull_batch_from_queue(self):
