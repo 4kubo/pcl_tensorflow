@@ -40,6 +40,8 @@ def arg_parse():
     parser.add_argument("--clip_min",
                         type=float,
                         default=1e-10)
+    parser.add_argument("--cut_end",
+                        action="store_false")
     # Configulation
     parser.add_argument("-v", "--visualise",
                         action="store_true")
@@ -117,7 +119,7 @@ def main(_):
                           is_lstm=args.is_lstm, batch_size=args.batch_size)
             total_step += 1
 
-def consistency(values, rewards, log_pies, T, d, gamma, tau):
+def consistency(values, rewards, log_pies, T, d, gamma, tau, cut_end=True):
     """
     Calculate path consistency
     Here, we use end of samples
@@ -142,6 +144,10 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau):
     value_m[1 == value_m] = gamma**d
     value_m[T - d + 1:, -1] = [gamma**(d - i - 1) for i in range(d - 1)]
 
+    if cut_end:
+        discount_m = discount_m[:T-d+1, :]
+        value_m = value_m[:T-d+1, :]
+
     discounted_values = value_m.dot(values)
     discounted_rewards = discount_m.dot(rewards)
     g = discount_m.dot(log_pies)
@@ -153,7 +159,7 @@ Batch = namedtuple("Batch", ["state", "action", "consistency", "terminal", "feat
                              "discounted_r", "discount_m", "value_m"])
 
 
-def process_rollout(rollout, d, gamma, tau, lambda_=1.0):
+def process_rollout(rollout, d, gamma, tau, cut_end=True, lambda_=1.0):
     """
     Given a rollout, compute its returns and the advantage
     :param rollout:
@@ -168,7 +174,7 @@ def process_rollout(rollout, d, gamma, tau, lambda_=1.0):
     values = np.asarray(rollout.values)
     log_pies = np.asarray(rollout.log_pies)
     batch_consistency, discounted_r, discount_m, value_m\
-        = consistency(values, rewards, log_pies, rollout.T, d, gamma, tau)
+        = consistency(values, rewards, log_pies, rollout.T, d, gamma, tau, cut_end)
 
     features = rollout.features[0]
     return Batch(batch_states, batch_actions, batch_consistency, rollout.terminal,
@@ -291,6 +297,7 @@ def env_runner(sess, env, policy, max_step_per_episode,
 class PCL(object):
     def __init__(self, env, args):
         self.env = env
+        self.args = args
         self.is_lstm = args.is_lstm
         self.max_step_per_episode = args.max_step_per_episode
         self.visualise = args.visualise
@@ -399,7 +406,7 @@ class PCL(object):
         self.local_steps += 1
 
     def train(self, rollout, report, sess):
-        batch = process_rollout(rollout, self.d, self.gamma, self.tau, lambda_=1.0)
+        batch = process_rollout(rollout, self.d, self.gamma, self.tau, self.args.cut_end, lambda_=1.0)
 
         feed_dict = {
             self.pi.x: batch.state,

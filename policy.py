@@ -138,7 +138,7 @@ class LinearPolicy(object):
 
         with tf.variable_scope("phi"):
             hidden_v = relu(x, 50, "hidden0")
-            for i in range(0):
+            for i in range(1):
                 hidden_v = relu(hidden_v, 50, "hidden{}".format(i+1))
             self.values = tf.reshape(relu(hidden_v, 1, "value"), [-1])
 
