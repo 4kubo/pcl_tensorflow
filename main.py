@@ -139,8 +139,8 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau):
     discount_m[0 < discount_m] = gammas
 
     value_m = -np.eye(T, T + 1) + np.eye(T, T + 1, k=d)
-    value_m[1 == value_m] = gamma**(d - 1)
-    value_m[T - d + 1:, -1] = [gamma**(d - i + 1) for i in range(d - 1)]
+    value_m[1 == value_m] = gamma**d
+    value_m[T - d + 1:, -1] = [gamma**(d - i - 1) for i in range(d - 1)]
 
     discounted_values = value_m.dot(values)
     discounted_rewards = discount_m.dot(rewards)
