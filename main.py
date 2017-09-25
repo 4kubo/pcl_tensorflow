@@ -33,6 +33,9 @@ def arg_parse():
     parser.add_argument("-b", "--batch_size",
                         type=int,
                         default=100)
+    parser.add_argument("-r", "--actor_learning_rate",
+                        type=float,
+                        default=7e-4)
     parser.add_argument("-c", "--critic_weight",
                         type=float,
                         default=0.1)
@@ -360,7 +363,7 @@ class PCL(object):
         self.discounted_r = tf.placeholder(tf.float32, [None], name="discounted_r")
 
         self.replay_buffer = ReplayBuffer()
-        self.actor_learning_rate = 5e-3
+        self.actor_learning_rate = 7e-4
 
         log_prob_tf = tf.log(tf.clip_by_value(self.pi.logits[:-1, :], args.clip_min, 1.0))
         log_pi = tf.reduce_sum(log_prob_tf * self.action, [1])
@@ -447,7 +450,7 @@ class PCL(object):
         # self.pi_loss = -tf.reduce_sum(self.consistency * g)
         # self.v_loss = -tf.reduce_sum(self.consistency*(v_t - gamma*v_t_d))
 
-        opt_pi = tf.train.AdamOptimizer(self.actor_learning_rate)
+        opt_pi = tf.train.AdamOptimizer(args.actor_learning_rate)
         opt_value = tf.train.AdamOptimizer(self.actor_learning_rate*args.critic_weight)
         opt = tf.train.AdamOptimizer(1e-4)
 
