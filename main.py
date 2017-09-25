@@ -5,8 +5,6 @@ import tensorflow as tf
 import six.moves.queue as queue
 import os
 from argparse import ArgumentParser
-# import threading
-import scipy.signal
 
 from policy import LSTMPolicy, LinearPolicy
 from replay_buffer import ReplayBuffer
@@ -68,7 +66,6 @@ def arg_parse():
     args = parser.parse_args()
     return args
 
-
 def main(_):
     args = arg_parse()
 
@@ -120,17 +117,20 @@ def main(_):
                           is_lstm=args.is_lstm, batch_size=args.batch_size)
             total_step += 1
 
-def discount(x, gamma):
-    return scipy.signal.lfilter([1], [1, -gamma], x[::-1], axis=0)[::-1]
-
-
 def consistency(values, rewards, log_pies, T, d, gamma, tau):
+    """
+    Calculate path consistency
+    Here, we use end of samples
+    :param values:
+    :param rewards:
+    :param log_pies:
+    :param T:
+    :param d:
+    :param gamma:
+    :param tau:
+    :return:
+    """
     d = d if d < T else T
-    # # Indexes for actions and rewards
-    # index1 = [(np.arange(d) + t, t) for t in range(T - d + 1)]
-    # index2 = [(np.arange(d - t - 1) + T-d+t+1, T-d+t+1) for t in range(d - 1)]
-    # index1_ = [list(range(t, t+d)) for t in range(T-d+1)]
-    # index2_ = [list(range(t, T)) for t in range(T-d+1, T)]
 
     discount_m =np.tril(np.triu(np.ones((T, T))), k=d-1)
     gamma1 = [[gamma**i for i in range(d)] for t in range(T-d+1)]
@@ -147,32 +147,6 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau):
     g = discount_m.dot(log_pies)
     consistency = discounted_values + discounted_rewards - g
     return consistency, discounted_rewards, discount_m, value_m
-    #
-    #
-    # gammas = [gamma ** i for i in range(d)]
-    # r1 = np.vstack([rewards[i] for i in index1])
-    # if 1 < T and 1 < d:
-    #     r2 = np.vstack([np.r_[rewards[i], np.zeros(d - i.size)] for i in index2])
-    #     r = np.vstack((r1, r2))
-    #     discounted_r = r.dot(np.array(gammas))
-    #
-    #     lp1 = np.vstack([log_pies[i] for i in index1])
-    #     lp2 = np.vstack([np.r_[log_pies[i], np.zeros(d - i.size)] for i in index2])
-    #     lp = np.vstack((lp1, lp2))
-    # else:
-    #     discounted_r = np.array([rewards[0]])
-    #
-    #     lp = np.vstack([log_pies[i] for i in index1])
-    #
-    # # log pies
-    # g = lp.dot(np.array(gammas))
-    #
-    # exp = [d] * (T - d + 1) + [d - t - 1 for t in range(d - 1)]
-    # gamma_d = np.power(gamma, exp)
-    # v_t = values[:T]
-    # v_t_d = np.array([values[i[-1]+1] for i in index1 + index2])
-    # consistency = -v_t + gamma_d*v_t_d + discounted_r - tau*g
-    # return consistency, discounted_r
 
 
 Batch = namedtuple("Batch", ["state", "action", "consistency", "terminal", "features", "reward",
@@ -181,7 +155,7 @@ Batch = namedtuple("Batch", ["state", "action", "consistency", "terminal", "feat
 
 def process_rollout(rollout, d, gamma, tau, lambda_=1.0):
     """
-    given a rollout, compute its returns and the advantage
+    Given a rollout, compute its returns and the advantage
     :param rollout:
     :param d:
     :param gamma: discount ratio
@@ -240,18 +214,14 @@ class PartialRollout(object):
         self.features.extend(other.features)
         self.T += other.T
 
-
-def log_softmax(action_logit, one_hot_action):
-    log_distrib = action_logit - np.log(np.sum(np.exp(action_logit)))
-    log_pi = log_distrib[0, one_hot_action.argmax()]
-    return log_pi
-
 def sample_log_pi(action_logit, action_dim, clip_min=1e-10):
     # Clipping to avoid log 0
     np.clip(action_logit, clip_min, 1.0, out=action_logit)
     action_logit = np.squeeze(action_logit, 0)
+    # Normalization
     sum_ = np.sum(action_logit)
     pi = action_logit / sum_
+    # Sample action from current policy
     action_id = np.random.choice(np.arange(pi.shape[0]), p=pi)
     log_pi = np.log(pi)
     log_pi = log_pi[action_id]
@@ -259,7 +229,6 @@ def sample_log_pi(action_logit, action_dim, clip_min=1e-10):
     one_hot_action = np.zeros(action_dim)
     one_hot_action[action_id] = 1
     return log_pi, one_hot_action
-
 
 def env_runner(sess, env, policy, max_step_per_episode,
                summary_writer=None, visualize=False, is_lstm=False):
@@ -319,25 +288,6 @@ def env_runner(sess, env, policy, max_step_per_episode,
     return rollout
 
 
-def tf_stack(max_, inner_body, init, dim):
-    """
-    utility function for stacking tensor like python list comprehension
-    :param max_:
-    :param inner_body:
-    :param init:
-    :param dim:
-    :return:
-    """
-    cond = lambda i, m: tf.less(i, max_)
-    body = lambda i, m: [i + 1,
-                         tf.concat([m, tf.reshape(inner_body(i), (1, dim))], axis=0)]
-    i = tf.constant(1)
-    init = tf.reshape(init, (1, dim))
-    _, stacked_tensor = tf.while_loop(cond, body, loop_vars=[i, init],
-                                      shape_invariants=[i.get_shape(), tf.TensorShape([None, None])])
-    return stacked_tensor
-
-
 class PCL(object):
     def __init__(self, env, args):
         self.env = env
@@ -353,106 +303,39 @@ class PCL(object):
                                           name="consistency")
         self.discount_m = tf.placeholder(tf.float32, [None, None], name="discount_m")
         self.value_m = tf.placeholder(tf.float32, [None, None], name="value_m")
+        self.reward = tf.placeholder(tf.float32, name="reward")
+        self.discounted_r = tf.placeholder(tf.float32, [None], name="discounted_r")
         self.values = pi.values
         self.queue = queue.Queue(5)
         self.d = args.d
         self.gamma = args.gamma
         self.tau = args.tau
         self.local_steps = 0
-        self.reward = tf.placeholder(tf.float32, name="reward")
-        self.discounted_r = tf.placeholder(tf.float32, [None], name="discounted_r")
-
         self.replay_buffer = ReplayBuffer()
-        self.actor_learning_rate = 7e-4
 
-        log_prob_tf = tf.log(tf.clip_by_value(self.pi.logits[:-1, :], args.clip_min, 1.0))
-        log_pi = tf.reduce_sum(log_prob_tf * self.action, [1])
         T = tf.shape(self.action)[0]
         d = tf.cond(tf.constant(self.d) < T, lambda: tf.constant(self.d), lambda: T)
 
-        g = tf.reshape(tf.matmul(self.discount_m, log_pi[:, None]), [-1])
-        discounted_values = tf.reshape(tf.matmul(self.value_m, self.values[:, None]), [-1])
+        # Calculate log pi from sampled actions
+        log_prob_tf = tf.log(tf.clip_by_value(self.pi.logits[:-1, :], args.clip_min, 1.0))
+        log_pi = tf.reduce_sum(log_prob_tf * self.action, [1])
 
+        g = tf.reshape(tf.matmul(self.discount_m, log_pi[:, None]), [-1])
+        # Discounted values
+        discounted_values = tf.reshape(tf.matmul(self.value_m, self.values[:, None]), [-1])
+        # Path Consistency
         consistency = discounted_values + self.discounted_r - g
+
+        # Calculation of losses
         self.pi_loss = tf.reduce_sum(-self.consistency*g)
         self.v_loss = tf.reduce_sum(self.consistency*discounted_values)
 
         # Calculation of entropy for report
         entropy = -tf.reduce_mean(tf.reduce_sum(log_prob_tf*self.pi.logits[:-1, :], axis=1))
 
-        # # Making sliding slice indexes
-        # body1 = lambda i: tf.range(self.d) + i
-        # index1 = tf_stack(T - d + 1, body1, tf.range(d), d)
-        #
-        # body2 = lambda i: \
-        #     tf.concat([tf.range(d - i - 1) + T - d + i + 1, -tf.ones((i + 1,),
-        #                                                                        tf.int32)], axis=0)
-        # init_m2 = tf.concat([tf.range(d - 1) + T - d + 1, -tf.ones(1, tf.int32)], axis=0)
-        # index2 = tf_stack(d - 1, body2, init_m2, d)
-        #
-        # log_body1 = lambda i: tf.gather(log_pi, tf.gather(index1, i))
-        # init_m1 = tf.gather(log_pi, tf.gather(index1, 0))
-        # log_pies1 = tf_stack(T - d + 1, log_body1, init_m1, d)
-        #
-        # log_body2 = lambda i: \
-        #     tf.concat([tf.gather(log_pi, tf.gather(tf.gather(index2, i), tf.range(d - i - 1))),
-        #                tf.zeros((i + 1,))
-        #                ], 0)
-        #
-        # init_m2 = tf.concat([tf.gather(log_pi, tf.gather(tf.gather(index2, 0), tf.range(d - 1))),
-        #                      tf.zeros(1)], axis=0)
-        # log_pies2 = tf_stack(d - 1, log_body2, init_m2, d)
-        # # In shape (T, d)
-        # log_pies = tf.cond(tf.logical_and(1 < T, 1 < d), lambda: tf.concat([log_pies1, log_pies2], 0), lambda: log_pies1)
-        #
-        # # Calculation of pi loss
-        # gammas = tf.expand_dims(tf.pow(self.gamma, tf.cast(tf.range(d), tf.float32)), 1)
-        # g = tf.matmul(log_pies, gammas)
-        # g = tf.squeeze(g, axis=1)
-        #
-        # # pi_loss = -tf.reduce_sum(self.consistency * g)
-        #
-        # # gamma_t1 = tf.cast(tf.tile(np.array([[self.gamma**d]]), [T - d + 1, 1]), tf.float32)
-        # gamma_t1 = tf.pow(tf.ones((T - d + 1, 1))*self.gamma, tf.cast(d, tf.float32))
-        # gamma_body = lambda i: tf.reshape(self.gamma ** tf.cast(d - i - 1, tf.float32),
-        #                                   (1, 1))
-        # gamma_init = tf.pow(self.gamma, tf.cast(d - 1, tf.float32))
-        # gamma_t2 = tf_stack(d - 1, gamma_body, gamma_init, 1)
-        # gamma = tf.cond(tf.logical_and(1 < T, 1 < d), lambda: tf.squeeze(tf.concat([gamma_t1, gamma_t2], axis=0), axis=1),
-        #                 lambda: tf.constant(self.gamma))
-        #
-        # v_t = self.values[:-1]
-        # v_t_d1 = self.values[d:]
-        # v_t_d2 = tf.ones((d-1,))*self.values[T]
-        # # If `T` is 1, `v_t_d` is composed only of last element of `values`, and `v_t_d2` is empty
-        # v_t_d = tf.cond(tf.logical_and(1 < T, 1 < d), lambda: tf.concat([v_t_d1, v_t_d2], axis=0), lambda: self.values[1:2])
-        #
-        # consistency = - v_t + gamma * v_t_d + self.discounted_r - self.tau * g
-        #
-        # # log_body1 = lambda i: tf.gather(log_pi, tf.gather(index1, i))
-        # # init_m1 = tf.gather(log_pi, tf.gather(index1, 0))
-        # # log_pies = tf_stack(T - d + 1, log_body1, init_m1, d)
-        # # # Calculation of pi loss
-        # # gammas = tf.expand_dims(tf.pow(self.gamma, tf.cast(tf.range(d), tf.float32)), 1)
-        # # g = tf.matmul(log_pies, gammas)
-        # # g = tf.squeeze(g, axis=1)
-        # #
-        # # gamma = tf.pow(tf.ones((T - d + 1,))*self.gamma, tf.cast(d, tf.float32))
-        # #
-        # # v_t = self.values[:T-d+1]
-        # # v_t_d = self.values[d:]
-        # #
-        # # consistency = - v_t + gamma * v_t_d + self.discounted_r[:T - d + 1] - self.tau * g
-
-        self.hoge = consistency
-
         self.loss = tf.pow(consistency, 2.0)
-        # self.pi_loss = -tf.reduce_sum(self.consistency * g)
-        # self.v_loss = -tf.reduce_sum(self.consistency*(v_t - gamma*v_t_d))
-
         opt_pi = tf.train.AdamOptimizer(args.actor_learning_rate)
-        opt_value = tf.train.AdamOptimizer(self.actor_learning_rate*args.critic_weight)
-        opt = tf.train.AdamOptimizer(1e-4)
+        opt_value = tf.train.AdamOptimizer(args.actor_learning_rate*args.critic_weight)
 
         tf.summary.scalar("loss", tf.divide(tf.reduce_sum(self.loss, axis=0),
                                             tf.cast(T*self.d, tf.float32)))
@@ -464,8 +347,8 @@ class PCL(object):
                          opt_value.minimize(self.v_loss, var_list=pi.phi)]
         self.report = {"entropy": entropy, "loss": self.loss}
 
-        # tf.summary.scalar("loss", tf.divide(tf.reduce_sum(self.loss, axis=0),
-        #                                     tf.cast(T*self.d, tf.float32)))
+        tf.summary.scalar("loss", tf.divide(tf.reduce_sum(self.loss, axis=0),
+                                            tf.cast(T*d, tf.float32)))
         tf.summary.scalar("reward", self.reward)
         self.summary_op = tf.summary.merge_all()
 
@@ -506,7 +389,6 @@ class PCL(object):
             entropy = fetched["report"]["entropy"]
             print("@{2}; reward : {0:.3}, loss : {1:.3}, entropy : {3:.3}"
                   .format(np.sum(rollout.rewards), loss, step, entropy))
-
 
         self.replay_buffer.add(rollout)
         if self.replay_buffer.trainable:
