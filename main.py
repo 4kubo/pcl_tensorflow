@@ -139,13 +139,13 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau):
     discount_m[0 < discount_m] = gammas
 
     value_m = -np.eye(T, T + 1) + np.eye(T, T + 1, k=d)
-    value_m[T - d:, -1] = 1
-    value_m[0 < value_m] = gamma**(d-1)
+    value_m[1 == value_m] = gamma**(d - 1)
+    value_m[T - d + 1:, -1] = [gamma**(d - i + 1) for i in range(d - 1)]
 
     discounted_values = value_m.dot(values)
     discounted_rewards = discount_m.dot(rewards)
     g = discount_m.dot(log_pies)
-    consistency = discounted_values + discounted_rewards - g
+    consistency = discounted_values + discounted_rewards - tau*g
     return consistency, discounted_rewards, discount_m, value_m
 
 
@@ -324,7 +324,7 @@ class PCL(object):
         # Discounted values
         discounted_values = tf.reshape(tf.matmul(self.value_m, self.values[:, None]), [-1])
         # Path Consistency
-        consistency = discounted_values + self.discounted_r - g
+        consistency = discounted_values + self.discounted_r - self.tau*g
 
         # Calculation of entropy for report
         entropy = -tf.reduce_mean(tf.reduce_sum(log_prob_tf*self.pi.logits[:-1, :], axis=1))
