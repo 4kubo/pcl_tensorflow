@@ -337,9 +337,9 @@ class PCL(object):
         entropy = -tf.reduce_mean(tf.reduce_sum(log_prob_tf*self.pi.logits[:-1, :], axis=1))
 
         # Calculation of losses
-        self.pi_loss = tf.reduce_sum(-self.consistency*g)
-        self.v_loss = tf.reduce_sum(self.consistency*discounted_values)
-        self.loss = tf.pow(consistency, 2.0)
+        self.pi_loss = tf.reduce_sum(-self.consistency*g) / tf.cast(T, tf.float32)
+        self.v_loss = tf.reduce_sum(self.consistency*discounted_values) / tf.cast(T, tf.float32)
+        self.loss = tf.pow(consistency, 2.0) / tf.cast(T, tf.float32)
 
         # Optimizer for policy and value function
         opt_pi = tf.train.AdamOptimizer(args.actor_learning_rate)
@@ -352,8 +352,9 @@ class PCL(object):
         self.summary_op = tf.summary.merge_all()
 
         # each worker has a different set of adam optimizer parameters
-        self.train_op = [opt_pi.minimize(self.pi_loss, var_list=pi.theta),
-                         opt_value.minimize(self.v_loss, var_list=pi.phi)]
+        # self.train_op = [opt_pi.minimize(self.pi_loss, var_list=pi.theta),
+        #                  opt_value.minimize(self.v_loss, var_list=pi.phi)]
+        self.train_op = [opt_pi.minimize(self.loss)]
         self.report = {"entropy": entropy, "loss": self.loss}
         self.summary_op = tf.summary.merge_all()
 

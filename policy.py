@@ -129,18 +129,18 @@ class LinearPolicy(object):
             self.x, x = preprocess_observation_space(ob_space, n_hidden)
 
         with tf.variable_scope("theta"):
-            hidden_pi = relu(x, 50, "hidden0")
+            hidden_pi = relu(x, 50, "hidden0", normalized_columns_initializer())
             i = 0
             for i in range(0):
-                hidden_pi = relu(hidden_pi, 50, "hidden{}".format(i+1))
-            hidden_pi = relu(hidden_pi, self.action_dim, "hidden{}".format(i+1))
+                hidden_pi = relu(hidden_pi, 50, "hidden{}".format(i+1), normalized_columns_initializer())
+            hidden_pi = relu(hidden_pi, self.action_dim, "hidden{}".format(i+1), normalized_columns_initializer())
             self.logits = tf.nn.softmax(hidden_pi, name="softmax")
 
         with tf.variable_scope("phi"):
-            hidden_v = relu(x, 50, "hidden0")
+            hidden_v = relu(x, 50, "hidden0", normalized_columns_initializer())
             for i in range(1):
-                hidden_v = relu(hidden_v, 50, "hidden{}".format(i+1))
-            self.values = tf.reshape(relu(hidden_v, 1, "value"), [-1])
+                hidden_v = relu(hidden_v, 50, "hidden{}".format(i+1), normalized_columns_initializer())
+            self.values = tf.reshape(relu(hidden_v, 1, "value", normalized_columns_initializer()), [-1])
 
         # Collecting trainable variables
         common_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "common")
@@ -203,7 +203,7 @@ def preprocess_observation_space(observation_space, n_hidden=32):
             print("observation dim :", observation_space.shape[0])
             x = x_placeholder = tf.placeholder(tf.float32, [None, observation_space.shape[0]])
             for i in range(2):
-                x = relu(x, n_hidden, 'common{}'.format(i))
+                x = relu(x, n_hidden, 'common{}'.format(i), normalized_columns_initializer())
             return x_placeholder, x
         else:
             print("Not implemented yet!")
@@ -215,5 +215,5 @@ def preprocess_observation_space(observation_space, n_hidden=32):
         # one hot action vector
         x = tf.one_hot(x_placeholder, obs_dim, axis=1)
         for l in range(2):
-            x = relu(x, n_hidden, "common{}".format(l))
+            x = relu(x, n_hidden, "common{}".format(l), normalized_columns_initializer())
         return x_placeholder, x
