@@ -82,7 +82,11 @@ def main(_):
 
     total_step = 0
 
-    model = PCL(env, args)
+    model = PCL(env, d=args.d, gamma=args.gamma, tau=args.tau,
+                actor_learning_rate=args.actor_learning_rate,
+                critic_weight=args.critic_weight, is_lstm=args.is_lstm, visualise=args.visualise,
+                max_step_per_episode=args.max_step_per_episode,
+                cut_end=args.cut_end, clip_min=args.clip_min)
 
     init_all_op = tf.global_variables_initializer()
     logdir = os.path.join(args.logdir, "train")
@@ -159,13 +163,12 @@ Batch = namedtuple("Batch", ["state", "action", "consistency", "terminal", "feat
                              "discounted_r", "discount_m", "value_m"])
 
 
-def process_rollout(rollout, d, gamma, tau, cut_end=True, lambda_=1.0):
+def process_rollout(rollout, d, gamma, tau, cut_end=True):
     """
     Given a rollout, compute its returns and the advantage
     :param rollout:
     :param d:
     :param gamma: discount ratio
-    :param lambda_:
     :return:
     """
     batch_states = np.asarray(rollout.states)
@@ -295,60 +298,64 @@ def env_runner(sess, env, policy, max_step_per_episode,
 
 
 class PCL(object):
-    def __init__(self, env, args):
+    def __init__(self, env, d=10, gamma=1.0, tau=0.01, actor_learning_rate=1e-4,
+                 critic_weight=0.1, is_lstm=False, visualise=False, max_step_per_episode=1000,
+                 cut_end=True, clip_min=1e-10):
         self.env = env
-        self.args = args
-        self.is_lstm = args.is_lstm
-        self.max_step_per_episode = args.max_step_per_episode
-        self.visualise = args.visualise
-        if args.is_lstm:
+        self.d = d
+        self.gamma = gamma
+        self.tau = tau
+        self.actor_learning_rate = actor_learning_rate
+        self.is_lstm = is_lstm
+        self.max_step_per_episode = max_step_per_episode
+        self.visualise = visualise
+        self.cut_end = cut_end
+        self.clip_min = clip_min
+        if self.is_lstm:
             self.pi = pi = LSTMPolicy(env.observation_space, env.action_space)
         else:
             self.pi = pi = LinearPolicy(env.observation_space, env.action_space)
-        self.action = tf.placeholder(tf.float32, [None, pi.action_dim], name="action")
-        self.consistency = tf.placeholder(tf.float32, [None],
+        self.action_ph = tf.placeholder(tf.float32, [None, pi.action_dim], name="action")
+        self.consistency_ph = tf.placeholder(tf.float32, [None],
                                           name="consistency")
-        self.discount_m = tf.placeholder(tf.float32, [None, None], name="discount_m")
-        self.value_m = tf.placeholder(tf.float32, [None, None], name="value_m")
-        self.reward = tf.placeholder(tf.float32, name="reward")
-        self.discounted_r = tf.placeholder(tf.float32, [None], name="discounted_r")
+        self.discount_m_ph = tf.placeholder(tf.float32, [None, None], name="discount_m")
+        self.value_m_ph = tf.placeholder(tf.float32, [None, None], name="value_m")
+        self.reward_ph = tf.placeholder(tf.float32, name="reward")
+        self.discounted_r_ph = tf.placeholder(tf.float32, [None], name="discounted_r")
         self.values = pi.values
         self.queue = queue.Queue(5)
-        self.d = args.d
-        self.gamma = args.gamma
-        self.tau = args.tau
         self.local_steps = 0
         self.replay_buffer = ReplayBuffer()
 
         # The length of one episode
-        T = tf.shape(self.action)[0]
+        T = tf.shape(self.action_ph)[0]
         d = tf.cond(tf.constant(self.d) < T, lambda: tf.constant(self.d), lambda: T)
         # Calculate log pi from sampled actions
-        log_prob_tf = tf.log(tf.clip_by_value(self.pi.logits[:-1, :], args.clip_min, 1.0))
-        log_pi = tf.reduce_sum(log_prob_tf * self.action, [1])
+        log_prob_tf = tf.log(tf.clip_by_value(self.pi.logits[:-1, :], self.clip_min, 1.0))
+        log_pi = tf.reduce_sum(log_prob_tf * self.action_ph, [1])
         # Discounted action distribution
-        g = tf.reshape(tf.matmul(self.discount_m, log_pi[:, None]), [-1])
+        g = tf.reshape(tf.matmul(self.discount_m_ph, log_pi[:, None]), [-1])
         # Discounted values
-        discounted_values = tf.reshape(tf.matmul(self.value_m, self.values[:, None]), [-1])
+        discounted_values = tf.reshape(tf.matmul(self.value_m_ph, self.values[:, None]), [-1])
         # Path Consistency
-        consistency = discounted_values + self.discounted_r - self.tau*g
+        consistency = discounted_values + self.discounted_r_ph - self.tau*g
 
         # Calculation of entropy for report
         entropy = -tf.reduce_mean(tf.reduce_sum(log_prob_tf*self.pi.logits[:-1, :], axis=1))
 
         # Calculation of losses
-        self.pi_loss = tf.reduce_sum(-self.consistency*g) / tf.cast(T, tf.float32)
-        self.v_loss = tf.reduce_sum(self.consistency*discounted_values) / tf.cast(T, tf.float32)
+        self.pi_loss = tf.reduce_sum(-self.consistency_ph*g) / tf.cast(T, tf.float32)
+        self.v_loss = tf.reduce_sum(self.consistency_ph*discounted_values) / tf.cast(T, tf.float32)
         self.loss = tf.pow(consistency, 2.0) / tf.cast(T, tf.float32)
 
         # Optimizer for policy and value function
-        opt_pi = tf.train.AdamOptimizer(args.actor_learning_rate)
-        opt_value = tf.train.AdamOptimizer(args.actor_learning_rate*args.critic_weight)
+        opt_pi = tf.train.AdamOptimizer(actor_learning_rate)
+        opt_value = tf.train.AdamOptimizer(actor_learning_rate*critic_weight)
 
         # Summary
         tf.summary.scalar("loss", tf.divide(tf.reduce_sum(self.loss, axis=0),
                                             tf.cast(T*self.d, tf.float32)))
-        tf.summary.scalar("reward", self.reward)
+        tf.summary.scalar("reward", self.reward_ph)
         self.summary_op = tf.summary.merge_all()
 
         # each worker has a different set of adam optimizer parameters
@@ -407,16 +414,16 @@ class PCL(object):
         self.local_steps += 1
 
     def train(self, rollout, report, sess):
-        batch = process_rollout(rollout, self.d, self.gamma, self.tau, self.args.cut_end, lambda_=1.0)
+        batch = process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
 
         feed_dict = {
             self.pi.x: batch.state,
-            self.action: batch.action,
-            self.consistency: batch.consistency,
-            self.reward : batch.reward,
-            self.discounted_r : batch.discounted_r,
-            self.discount_m : batch.discount_m,
-            self.value_m : batch.value_m
+            self.action_ph: batch.action,
+            self.consistency_ph: batch.consistency,
+            self.reward_ph : batch.reward,
+            self.discounted_r_ph : batch.discounted_r,
+            self.discount_m_ph : batch.discount_m,
+            self.value_m_ph : batch.value_m
         }
 
         if self.is_lstm:
