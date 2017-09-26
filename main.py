@@ -25,9 +25,6 @@ def arg_parse():
     parser.add_argument("--d",
                         type=int,
                         default=3)
-    parser.add_argument("--task",
-                        type=int,
-                        default=0)
     parser.add_argument("-b", "--batch_size",
                         type=int,
                         default=100)
@@ -37,12 +34,18 @@ def arg_parse():
     parser.add_argument("-c", "--critic_weight",
                         type=float,
                         default=0.1)
+    parser.add_argument("-a", "--alpha",
+                        type=float,
+                        default=0.5)
     parser.add_argument("--clip_min",
                         type=float,
                         default=1e-10)
     parser.add_argument("--cut_end",
                         action="store_false")
     # Configulation
+    parser.add_argument("--task",
+                        type=int,
+                        default=0)
     parser.add_argument("-v", "--visualise",
                         action="store_true")
     parser.add_argument("--step_to_report",
@@ -84,8 +87,8 @@ def main(_):
 
     model = PCL(env, d=args.d, gamma=args.gamma, tau=args.tau,
                 actor_learning_rate=args.actor_learning_rate,
-                critic_weight=args.critic_weight, is_lstm=args.is_lstm, visualise=args.visualise,
-                max_step_per_episode=args.max_step_per_episode,
+                critic_weight=args.critic_weight, alpha=args.alpha, is_lstm=args.is_lstm,
+                visualise=args.visualise, max_step_per_episode=args.max_step_per_episode,
                 cut_end=args.cut_end, clip_min=args.clip_min)
 
     init_all_op = tf.global_variables_initializer()
@@ -299,8 +302,8 @@ def env_runner(sess, env, policy, max_step_per_episode,
 
 class PCL(object):
     def __init__(self, env, d=10, gamma=1.0, tau=0.01, actor_learning_rate=1e-4,
-                 critic_weight=0.1, is_lstm=False, visualise=False, max_step_per_episode=1000,
-                 cut_end=True, clip_min=1e-10):
+                 critic_weight=0.1, alpha=0.5, is_lstm=False, visualise=False,
+                 max_step_per_episode=1000, cut_end=True, clip_min=1e-10):
         self.env = env
         self.d = d
         self.gamma = gamma
@@ -325,7 +328,7 @@ class PCL(object):
         self.values = pi.values
         self.queue = queue.Queue(5)
         self.local_steps = 0
-        self.replay_buffer = ReplayBuffer()
+        self.replay_buffer = ReplayBuffer(alpha=alpha)
 
         # The length of one episode
         T = tf.shape(self.action_ph)[0]
