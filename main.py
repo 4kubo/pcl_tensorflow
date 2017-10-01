@@ -184,7 +184,7 @@ def process_rollout(rollout, d, gamma, tau, cut_end=True):
 
     features = rollout.features[0]
     return Batch(batch_states, batch_actions, batch_consistency, rollout.terminal,
-                 features, np.sum(rewards), discounted_r, discount_m, value_m)
+                 features, rewards, discounted_r, discount_m, value_m)
 
 
 class PartialRollout(object):
@@ -323,7 +323,7 @@ class PCL(object):
                                           name="consistency")
         self.discount_m_ph = tf.placeholder(tf.float32, [None, None], name="discount_m")
         self.value_m_ph = tf.placeholder(tf.float32, [None, None], name="value_m")
-        self.reward_ph = tf.placeholder(tf.float32, name="reward")
+        self.reward_ph = tf.placeholder(tf.float32, [None], name="reward")
         self.discounted_r_ph = tf.placeholder(tf.float32, [None], name="discounted_r")
         self.values = pi.values
         self.queue = queue.Queue(5)
@@ -351,6 +351,10 @@ class PCL(object):
         self.v_loss = tf.reduce_sum(self.consistency_ph*discounted_values) / tf.cast(T, tf.float32)
         self.loss = tf.pow(consistency, 2.0) / tf.cast(T, tf.float32)
 
+        # Entropy regularized reward of sample (err): e.q. (15)
+        gammas = tf.pow(gamma, tf.cast(tf.range(T), tf.float32))
+        err = tf.reduce_sum(gammas * (self.reward_ph - tau*log_pi))
+
         # Optimizer for policy and value function
         opt_pi = tf.train.AdamOptimizer(actor_learning_rate)
         opt_value = tf.train.AdamOptimizer(actor_learning_rate*critic_weight)
@@ -358,14 +362,15 @@ class PCL(object):
         # Summary
         tf.summary.scalar("loss", tf.divide(tf.reduce_sum(self.loss, axis=0),
                                             tf.cast(T*self.d, tf.float32)))
-        tf.summary.scalar("reward", self.reward_ph)
+        tf.summary.scalar("reward", tf.reduce_sum(self.reward_ph))
+        tf.summary.scalar("entropy regularized reward", err)
         self.summary_op = tf.summary.merge_all()
 
         # each worker has a different set of adam optimizer parameters
         # self.train_op = [opt_pi.minimize(self.pi_loss, var_list=pi.theta),
         #                  opt_value.minimize(self.v_loss, var_list=pi.phi)]
         self.train_op = [opt_pi.minimize(self.loss)]
-        self.report = {"entropy": entropy, "loss": self.loss}
+        self.report = {"entropy": entropy, "loss": self.loss, "err": err}
         self.summary_op = tf.summary.merge_all()
 
     def pull_batch_from_queue(self):
@@ -403,8 +408,9 @@ class PCL(object):
             loss = fetched["report"]["loss"]
             loss = np.mean(loss)/d
             entropy = fetched["report"]["entropy"]
-            print("@{2}; reward : {0:.3}, loss : {1:.3}, entropy : {3:.3}"
-                  .format(np.sum(rollout.rewards), loss, step, entropy))
+            erer = fetched["report"]["err"]
+            print("@{2: >5}; reward : {0: >6.3}, er reward : {4: >8.3}, loss : {1: >8.3}, entropy : {3: >8.3}"
+                  .format(np.sum(rollout.rewards), loss, step, entropy, erer))
 
         self.replay_buffer.add(rollout)
         if self.replay_buffer.trainable:
