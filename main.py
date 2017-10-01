@@ -282,13 +282,6 @@ def env_runner(sess, env, policy, max_step_per_episode,
         last_state = state
         last_features = features
 
-        # if info:
-        #     summary = tf.Summary()
-        #     for k, v in info.items():
-        #         summary.value.add(tag=k, simple_value=float(v))
-        #     summary_writer.add_summary(summary, policy.global_step.eval())
-        #     summary_writer.flush()
-
         if terminal or step >= max_step_per_episode:
             terminal_end = True
             if step >= max_step_per_episode or not env.metadata.get('semantics.autoreset'):
@@ -319,8 +312,8 @@ class PCL(object):
         else:
             self.pi = pi = LinearPolicy(env.observation_space, env.action_space)
         self.action_ph = tf.placeholder(tf.float32, [None, pi.action_dim], name="action")
-        self.consistency_ph = tf.placeholder(tf.float32, [None],
-                                          name="consistency")
+        # self.consistency_ph = tf.placeholder(tf.float32, [None],
+        #                                   name="consistency")
         self.discount_m_ph = tf.placeholder(tf.float32, [None, None], name="discount_m")
         self.value_m_ph = tf.placeholder(tf.float32, [None, None], name="value_m")
         self.reward_ph = tf.placeholder(tf.float32, [None], name="reward")
@@ -347,8 +340,8 @@ class PCL(object):
         entropy = -tf.reduce_mean(tf.reduce_sum(log_prob_tf*self.pi.logits[:-1, :], axis=1))
 
         # Calculation of losses
-        self.pi_loss = tf.reduce_sum(-self.consistency_ph*g) / tf.cast(T, tf.float32)
-        self.v_loss = tf.reduce_sum(self.consistency_ph*discounted_values) / tf.cast(T, tf.float32)
+        self.pi_loss = tf.reduce_sum(-consistency*g) / tf.cast(T, tf.float32)
+        self.v_loss = tf.reduce_sum(consistency*discounted_values) / tf.cast(T, tf.float32)
         self.loss = tf.pow(consistency, 2.0) / tf.cast(T, tf.float32)
 
         # Entropy regularized reward of sample (err): e.q. (15)
@@ -366,7 +359,6 @@ class PCL(object):
         tf.summary.scalar("entropy regularized reward", err)
         self.summary_op = tf.summary.merge_all()
 
-        # each worker has a different set of adam optimizer parameters
         # self.train_op = [opt_pi.minimize(self.pi_loss, var_list=pi.theta),
         #                  opt_value.minimize(self.v_loss, var_list=pi.phi)]
         self.train_op = [opt_pi.minimize(self.loss)]
@@ -428,7 +420,6 @@ class PCL(object):
         feed_dict = {
             self.pi.x: batch.state,
             self.action_ph: batch.action,
-            self.consistency_ph: batch.consistency,
             self.reward_ph : batch.reward,
             self.discounted_r_ph : batch.discounted_r,
             self.discount_m_ph : batch.discount_m,
