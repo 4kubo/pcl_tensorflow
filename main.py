@@ -24,7 +24,7 @@ def arg_parse():
                         default=0.01)
     parser.add_argument("--d",
                         type=int,
-                        default=3)
+                        default=10)
     parser.add_argument("-b", "--batch_size",
                         type=int,
                         default=100)
@@ -42,7 +42,7 @@ def arg_parse():
                         default=1e-10)
     parser.add_argument("--cut_end",
                         action="store_false")
-    # Configulation
+    # Configuration
     parser.add_argument("--task",
                         type=int,
                         default=0)
@@ -401,7 +401,7 @@ class PCL(object):
             loss = np.mean(loss)/d
             entropy = fetched["report"]["entropy"]
             erer = fetched["report"]["err"]
-            print("@{2: >5}; reward : {0: >6.3}, er reward : {4: >8.3}, loss : {1: >8.3}, entropy : {3: >8.3}"
+            print("@{2: >5}; reward : {0: >8.3}, entropy regularized reward : {4: >8.3}, loss : {1: >8.3}, entropy : {3: >8.3}"
                   .format(np.sum(rollout.rewards), loss, step, entropy, erer))
 
         self.replay_buffer.add(rollout)
