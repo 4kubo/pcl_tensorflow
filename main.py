@@ -149,7 +149,9 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau, cut_end=True):
 
     value_m = -np.eye(T, T + 1) + np.eye(T, T + 1, k=d)
     value_m[1 == value_m] = gamma**d
-    value_m[T - d + 1:, -1] = [gamma**(d - i - 1) for i in range(d - 1)]
+    # value_m[T - d:, -1] = [1]*d if is_terminal\
+    #     else [gamma**(d - i) for i in range(d)]
+    value_m[T - d:, -1] = [gamma**(d - i) for i in range(d)]
 
     if cut_end:
         discount_m = discount_m[:T-d+1, :]
@@ -318,6 +320,7 @@ class PCL(object):
         self.value_m_ph = tf.placeholder(tf.float32, [None, None], name="value_m")
         self.reward_ph = tf.placeholder(tf.float32, [None], name="reward")
         self.discounted_r_ph = tf.placeholder(tf.float32, [None], name="discounted_r")
+        # self.values = tf.concat([pi.values[:-1], self.reward_ph[-1:]], 0)
         self.values = pi.values
         self.queue = queue.Queue(5)
         self.local_steps = 0
@@ -335,6 +338,7 @@ class PCL(object):
         discounted_values = tf.reshape(tf.matmul(self.value_m_ph, self.values[:, None]), [-1])
         # Path Consistency
         consistency = discounted_values + self.discounted_r_ph - self.tau*g
+        self.c = consistency
 
         # Calculation of entropy for report
         entropy = -tf.reduce_mean(tf.reduce_sum(log_prob_tf*self.pi.logits[:-1, :], axis=1))
@@ -342,7 +346,8 @@ class PCL(object):
         # Calculation of losses
         self.pi_loss = tf.reduce_sum(-consistency*g) / tf.cast(T, tf.float32)
         self.v_loss = tf.reduce_sum(consistency*discounted_values) / tf.cast(T, tf.float32)
-        self.loss = tf.pow(consistency, 2.0) / tf.cast(T, tf.float32)
+        self.loss = tf.reduce_sum(tf.pow(consistency, 2.0) / tf.cast(T, tf.float32))\
+                    + (self.values[-1] - self.reward_ph[-1])**2
 
         # Entropy regularized reward of sample (err): e.q. (15)
         gammas = tf.pow(gamma, tf.cast(tf.range(T), tf.float32))
@@ -353,8 +358,8 @@ class PCL(object):
         opt_value = tf.train.AdamOptimizer(actor_learning_rate*critic_weight)
 
         # Summary
-        tf.summary.scalar("loss", tf.divide(tf.reduce_sum(self.loss, axis=0),
-                                            tf.cast(T*self.d, tf.float32)))
+        # tf.summary.scalar("loss", tf.divide(tf.reduce_sum(self.loss, axis=0),
+        #                                     tf.cast(T*self.d, tf.float32)))
         tf.summary.scalar("reward", tf.reduce_sum(self.reward_ph))
         tf.summary.scalar("entropy regularized reward", err)
         self.summary_op = tf.summary.merge_all()
