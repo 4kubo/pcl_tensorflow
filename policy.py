@@ -124,12 +124,11 @@ class LinearPolicy(object):
     def __init__(self, ob_space, ac_space, n_hidden = 50):
         self.n_hidden = n_hidden
         # First dimension is the number of steps in an episode
-        with tf.variable_scope("common"):
-            self.action_dim, self.action_decoder = get_action_space(ac_space)
-            self.x, x = preprocess_observation_space(ob_space, n_hidden)
+        self.action_dim, self.action_decoder = get_action_space(ac_space)
 
         with tf.variable_scope("theta"):
-            hidden_pi = relu(x, 50, "hidden0", normalized_columns_initializer())
+            self.x_pi, x_pi = preprocess_observation_space(ob_space, n_hidden)
+            hidden_pi = relu(x_pi, 50, "hidden0", normalized_columns_initializer())
             i = 0
             for i in range(0):
                 hidden_pi = relu(hidden_pi, 50, "hidden{}".format(i+1), normalized_columns_initializer())
@@ -137,26 +136,26 @@ class LinearPolicy(object):
             self.logits = tf.nn.softmax(hidden_pi, name="softmax")
 
         with tf.variable_scope("phi"):
-            hidden_v = relu(x, 50, "hidden0", normalized_columns_initializer())
+            self.x_v, x_v = preprocess_observation_space(ob_space, n_hidden)
+            hidden_v = relu(x_v, 50, "hidden0", normalized_columns_initializer())
             for i in range(1):
                 hidden_v = relu(hidden_v, 50, "hidden{}".format(i+1), normalized_columns_initializer())
             self.values = tf.reshape(relu(hidden_v, 1, "value", normalized_columns_initializer()), [-1])
 
         # Collecting trainable variables
-        common_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "common")
-        self.theta = common_var + tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
-        self.phi = common_var + tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "phi")
+        self.theta = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
+        self.phi = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "phi")
 
     def get_initial_features(self):
         return [None, None]
 
     def act(self, state, *_):
         sess = tf.get_default_session()
-        return sess.run({"logits": self.logits, "values": self.values}, {self.x: [state]})
+        return sess.run({"logits": self.logits}, {self.x_pi: [state]})
 
     def value(self, state, *_):
         sess = tf.get_default_session()
-        return sess.run(self.values, {self.x: [state]})
+        return sess.run(self.values, {self.x_v: [state]})
 
 
 def get_action_space(action_space):

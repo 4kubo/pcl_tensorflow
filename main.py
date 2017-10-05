@@ -141,25 +141,30 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau, cut_end=True):
     """
     d = d if d < T else T
 
+    # Gamma discounted rewards
     discount_m =np.tril(np.triu(np.ones((T, T))), k=d-1)
     gamma1 = [[gamma**i for i in range(d)] for t in range(T-d+1)]
     gamma2 = [[gamma**i for i in range(T - t)] for t in range(T-d+1, T)]
     gammas = reduce(lambda x, y: x + y, gamma1 + gamma2)
     discount_m[0 < discount_m] = gammas
+    discounted_rewards = discount_m.dot(rewards)
 
+    # Gamma discounted values
     value_m = -np.eye(T, T + 1) + np.eye(T, T + 1, k=d)
     value_m[1 == value_m] = gamma**d
-    # value_m[T - d:, -1] = [1]*d if is_terminal\
-    #     else [gamma**(d - i) for i in range(d)]
-    value_m[T - d:, -1] = [gamma**(d - i) for i in range(d)]
-
+    value_m[T - d:, -1] = [gamma ** (d - i) for i in range(d)]
+    # value_m[T - d:, -1] = [0]*d
     if cut_end:
         discount_m = discount_m[:T-d+1, :]
         value_m = value_m[:T-d+1, :]
 
     discounted_values = value_m.dot(values)
-    discounted_rewards = discount_m.dot(rewards)
+
+    # Gamma discounted log pies
+    discount_m[T - d:, :] = 0
+    # discount_m[:, :] = 0
     g = discount_m.dot(log_pies)
+
     consistency = discounted_values + discounted_rewards - tau*g
     return consistency, discounted_rewards, discount_m, value_m
 
@@ -278,10 +283,11 @@ def env_runner(sess, env, policy, max_step_per_episode,
             env.render()
 
         # collect the experience
-        rollout.add(state, log_pi, action, reward, value, terminal, last_features)
+        state_to_input = state if isinstance(state, int) else state.copy()
+        rollout.add(state_to_input, log_pi, action, reward, value, terminal, last_features)
 
         episode_reward += reward
-        last_state = state
+        last_state = state_to_input
         last_features = features
 
         if terminal or step >= max_step_per_episode:
@@ -344,10 +350,12 @@ class PCL(object):
         entropy = -tf.reduce_mean(tf.reduce_sum(log_prob_tf*self.pi.logits[:-1, :], axis=1))
 
         # Calculation of losses
-        self.pi_loss = tf.reduce_sum(-consistency*g) / tf.cast(T, tf.float32)
-        self.v_loss = tf.reduce_sum(consistency*discounted_values) / tf.cast(T, tf.float32)
-        self.loss = tf.reduce_sum(tf.pow(consistency, 2.0) / tf.cast(T, tf.float32))\
-                    + (self.values[-1] - self.reward_ph[-1])**2
+        # self.loss = tf.reduce_sum(tf.pow(consistency, 2.0) / tf.cast(T, tf.float32))\
+        #             + (self.values[-1] - self.reward_ph[-1])**2
+
+        self.pi_loss = tf.reduce_mean(consistency ** 2)
+        self.v_loss = tf.reduce_mean(consistency ** 2) \
+                      + tf.cast(T, tf.float32) * (self.values[-1] - self.reward_ph[-1]) ** 2
 
         # Entropy regularized reward of sample (err): e.q. (15)
         gammas = tf.pow(gamma, tf.cast(tf.range(T), tf.float32))
@@ -364,10 +372,11 @@ class PCL(object):
         tf.summary.scalar("entropy regularized reward", err)
         self.summary_op = tf.summary.merge_all()
 
-        # self.train_op = [opt_pi.minimize(self.pi_loss, var_list=pi.theta),
-        #                  opt_value.minimize(self.v_loss, var_list=pi.phi)]
-        self.train_op = [opt_pi.minimize(self.loss)]
-        self.report = {"entropy": entropy, "loss": self.loss, "err": err}
+        self.train_op = [opt_pi.minimize(self.pi_loss, var_list=pi.theta),
+                         opt_value.minimize(self.v_loss, var_list=pi.phi)]
+        # self.train_op = [opt_value.minimize(self.v_loss, var_list=pi.phi)]
+
+        self.report = {"entropy": entropy, "loss": self.v_loss, "err": err}
         self.summary_op = tf.summary.merge_all()
 
     def pull_batch_from_queue(self):
@@ -423,7 +432,8 @@ class PCL(object):
         batch = process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
 
         feed_dict = {
-            self.pi.x: batch.state,
+            self.pi.x_v: batch.state,
+            self.pi.x_pi: batch.state,
             self.action_ph: batch.action,
             self.reward_ph : batch.reward,
             self.discounted_r_ph : batch.discounted_r,
