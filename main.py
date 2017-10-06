@@ -157,6 +157,7 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau, cut_end=True):
     if cut_end:
         discount_m = discount_m[:T-d+1, :]
         value_m = value_m[:T-d+1, :]
+        discounted_rewards = discounted_rewards[:T-d+1]
 
     discounted_values = value_m.dot(values)
 
@@ -350,12 +351,9 @@ class PCL(object):
         entropy = -tf.reduce_mean(tf.reduce_sum(log_prob_tf*self.pi.logits[:-1, :], axis=1))
 
         # Calculation of losses
-        # self.loss = tf.reduce_sum(tf.pow(consistency, 2.0) / tf.cast(T, tf.float32))\
-        #             + (self.values[-1] - self.reward_ph[-1])**2
-
         self.pi_loss = tf.reduce_mean(consistency ** 2)
         self.v_loss = tf.reduce_mean(consistency ** 2) \
-                      + tf.cast(T, tf.float32) * (self.values[-1] - self.reward_ph[-1]) ** 2
+                      + (self.values[-1] - self.reward_ph[-1]) ** 2
 
         # Entropy regularized reward of sample (err): e.q. (15)
         gammas = tf.pow(gamma, tf.cast(tf.range(T), tf.float32))
@@ -366,15 +364,13 @@ class PCL(object):
         opt_value = tf.train.AdamOptimizer(actor_learning_rate*critic_weight)
 
         # Summary
-        # tf.summary.scalar("loss", tf.divide(tf.reduce_sum(self.loss, axis=0),
-        #                                     tf.cast(T*self.d, tf.float32)))
+        tf.summary.scalar("loss", self.pi_loss)
         tf.summary.scalar("reward", tf.reduce_sum(self.reward_ph))
         tf.summary.scalar("entropy regularized reward", err)
         self.summary_op = tf.summary.merge_all()
 
         self.train_op = [opt_pi.minimize(self.pi_loss, var_list=pi.theta),
                          opt_value.minimize(self.v_loss, var_list=pi.phi)]
-        # self.train_op = [opt_value.minimize(self.v_loss, var_list=pi.phi)]
 
         self.report = {"entropy": entropy, "loss": self.v_loss, "err": err}
         self.summary_op = tf.summary.merge_all()

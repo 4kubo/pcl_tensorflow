@@ -139,8 +139,8 @@ class LinearPolicy(object):
             self.x_v, x_v = preprocess_observation_space(ob_space, n_hidden)
             hidden_v = relu(x_v, 50, "hidden0", normalized_columns_initializer())
             for i in range(1):
-                hidden_v = relu(hidden_v, 50, "hidden{}".format(i+1), normalized_columns_initializer())
-            self.values = tf.reshape(relu(hidden_v, 1, "value", normalized_columns_initializer()), [-1])
+                hidden_v = linear(hidden_v, 50, "hidden{}".format(i+1), normalized_columns_initializer())
+            self.values = tf.reshape(linear(hidden_v, 1, "value", normalized_columns_initializer()), [-1])
 
         # Collecting trainable variables
         self.theta = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
