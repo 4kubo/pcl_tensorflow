@@ -321,8 +321,6 @@ class PCL(object):
         else:
             self.pi = pi = LinearPolicy(env.observation_space, env.action_space)
         self.action_ph = tf.placeholder(tf.float32, [None, pi.action_dim], name="action")
-        # self.consistency_ph = tf.placeholder(tf.float32, [None],
-        #                                   name="consistency")
         self.discount_m_ph = tf.placeholder(tf.float32, [None, None], name="discount_m")
         self.value_m_ph = tf.placeholder(tf.float32, [None, None], name="value_m")
         self.reward_ph = tf.placeholder(tf.float32, [None], name="reward")
