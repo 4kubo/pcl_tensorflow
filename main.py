@@ -71,6 +71,7 @@ def arg_parse():
     args = parser.parse_args()
     return args
 
+
 def main(_):
     args = arg_parse()
 
@@ -96,7 +97,7 @@ def main(_):
     saver = tf.train.Saver()
 
     with tf.Session() as sess:
-        summary_writer = tf.summary.FileWriter(logdir + "_{}".format(args.task), sess.graph)\
+        summary_writer = tf.summary.FileWriter(logdir + "_{}".format(args.task), sess.graph) \
             if args.summary else None
         sess.run(init_all_op)
         model.start(sess, summary_writer)
@@ -126,6 +127,7 @@ def main(_):
                           is_lstm=args.is_lstm, batch_size=args.batch_size)
             total_step += 1
 
+
 def consistency(values, rewards, log_pies, T, d, gamma, tau, cut_end=True):
     """
     Calculate path consistency
@@ -142,36 +144,36 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau, cut_end=True):
     d = d if d < T else T
 
     # Gamma discounted rewards
-    discount_m =np.tril(np.triu(np.ones((T, T))), k=d-1)
-    gamma1 = [[gamma**i for i in range(d)] for t in range(T-d+1)]
-    gamma2 = [[gamma**i for i in range(T - t)] for t in range(T-d+1, T)]
+    discount_m = np.tril(np.triu(np.ones((T, T))), k=d - 1)
+    gamma1 = [[gamma ** i for i in range(d)] for t in range(T - d + 1)]
+    gamma2 = [[gamma ** i for i in range(T - t)] for t in range(T - d + 1, T)]
     gammas = reduce(lambda x, y: x + y, gamma1 + gamma2)
     discount_m[0 < discount_m] = gammas
     discounted_rewards = discount_m.dot(rewards)
 
     # Gamma discounted values
     value_m = -np.eye(T, T + 1) + np.eye(T, T + 1, k=d)
-    value_m[1 == value_m] = gamma**d
+    value_m[1 == value_m] = gamma ** d
     value_m[T - d:, -1] = [gamma ** (d - i) for i in range(d)]
     # value_m[T - d:, -1] = [0]*d
     if cut_end:
-        discount_m = discount_m[:T-d+1, :]
-        value_m = value_m[:T-d+1, :]
-        discounted_rewards = discounted_rewards[:T-d+1]
+        discount_m = discount_m[:T - d + 1, :]
+        value_m = value_m[:T - d + 1, :]
+        discounted_rewards = discounted_rewards[:T - d + 1]
 
     discounted_values = value_m.dot(values)
 
     # Gamma discounted log pies
-    discount_m[T - d:, :] = 0
-    # discount_m[:, :] = 0
+    # discount_m[T - d:, :] = 0
     g = discount_m.dot(log_pies)
 
-    consistency = discounted_values + discounted_rewards - tau*g
+    consistency = discounted_values[:, 0] + discounted_rewards - tau * g
     return consistency, discounted_rewards, discount_m, value_m
 
 
-Batch = namedtuple("Batch", ["state", "action", "consistency", "terminal", "features", "reward",
-                             "discounted_r", "discount_m", "value_m"])
+Batch = namedtuple("Batch", ["state", "action", "consistency", "terminal", "feature_p",
+                             "feature_v", "reward", "discounted_r", "discount_m", "value_m"])
+
 
 
 def process_rollout(rollout, d, gamma, tau, cut_end=True):
@@ -187,12 +189,12 @@ def process_rollout(rollout, d, gamma, tau, cut_end=True):
     rewards = np.asarray(rollout.rewards)
     values = np.asarray(rollout.values)
     log_pies = np.asarray(rollout.log_pies)
-    batch_consistency, discounted_r, discount_m, value_m\
+    batch_consistency, discounted_r, discount_m, value_m \
         = consistency(values, rewards, log_pies, rollout.T, d, gamma, tau, cut_end)
 
-    features = rollout.features[0]
+    feature_p, feature_v = rollout.features
     return Batch(batch_states, batch_actions, batch_consistency, rollout.terminal,
-                 features, rewards, discounted_r, discount_m, value_m)
+                 feature_p, feature_v, rewards, discounted_r, discount_m, value_m)
 
 
 class PartialRollout(object):
@@ -201,7 +203,7 @@ class PartialRollout(object):
     once it has processed enough steps.
     """
 
-    def __init__(self, initial_state, initial_value):
+    def __init__(self, initial_state, initial_value, feature_p, feature_v):
         self.states = [initial_state]
         self.log_pies = []
         self.actions = []
@@ -209,17 +211,16 @@ class PartialRollout(object):
         self.values = [initial_value]
         self.r = 0.0
         self.terminal = False
-        self.features = []
+        self.features = [feature_p, feature_v]
         self.T = 0
 
-    def add(self, state, log_pi, action, reward, value, terminal, features):
+    def add(self, state, log_pi, action, reward, value, terminal):
         self.states += [state]
         self.log_pies += [log_pi]
         self.actions += [action]
         self.rewards += [reward]
         self.values += [value]
         self.terminal = terminal
-        self.features += [features]
         self.T += 1
 
     def extend(self, other):
@@ -231,8 +232,8 @@ class PartialRollout(object):
         self.values.extend(other.values)
         self.r = other.r
         self.terminal = other.terminal
-        self.features.extend(other.features)
         self.T += other.T
+
 
 def sample_log_pi(action_logit, action_dim, clip_min=1e-10):
     # Clipping to avoid log 0
@@ -250,7 +251,8 @@ def sample_log_pi(action_logit, action_dim, clip_min=1e-10):
     one_hot_action[action_id] = 1
     return log_pi, one_hot_action
 
-def env_runner(sess, env, policy, max_step_per_episode,
+
+def env_runner(sess, env, policy_net, value_net, max_step_per_episode,
                summary_writer=None, visualize=False, is_lstm=False):
     """
     The logic of the thread runner.  In brief, it constantly keeps on running
@@ -260,42 +262,53 @@ def env_runner(sess, env, policy, max_step_per_episode,
     last_state = env.reset()
     if visualize:
         env.render()
-    last_features = policy.get_initial_features()
-    initial_value = policy.value(last_state, *last_features)[0]
+    last_feature_p = policy_net.get_initial_features()
+    last_feature_v = value_net.get_initial_features()
+    initial_value = value_net.value(last_state, *last_feature_v)["value"]
     step = 0
     episode_reward = 0
     terminal_end = False
-    rollout = PartialRollout(last_state, initial_value)
-    features = [None, None]
+    rollout = PartialRollout(last_state, initial_value, last_feature_p, last_feature_v)
+    feature_p = [None, None]
+    feature_v = [None, None]
 
     while not terminal_end:
         step += 1
 
-        fetches = policy.act(last_state, *last_features)
-        action_logit = fetches["logits"]
+        fetches = policy_net.act(last_state, *last_feature_p)
+        action_logit = fetches["logit"]
         if is_lstm:
-            features = fetches["features"]
-        log_pi, action = sample_log_pi(action_logit, policy.action_dim)
+            feature_p = fetches["feature"]
+        log_pi, action = sample_log_pi(action_logit, policy_net.action_dim)
         # argmax to convert from one-hot
-        action_code = policy.action_decoder(action)
+        action_code = policy_net.action_decoder(action)
         state, reward, terminal, info = env.step(action_code)
-        value = policy.value(state, *features)[0]
+
+        fetches = value_net.value(state, *last_feature_v)
+        value = fetches["value"]
+        if is_lstm:
+            feature_v = fetches["feature"]
+
         if visualize:
             env.render()
 
         # collect the experience
         state_to_input = state if isinstance(state, int) else state.copy()
-        rollout.add(state_to_input, log_pi, action, reward, value, terminal, last_features)
+        rollout.add(state_to_input, log_pi, action, reward, value, terminal)
 
         episode_reward += reward
+
+        # For next step
         last_state = state_to_input
-        last_features = features
+        last_feature_p = feature_p
+        last_feature_v = feature_v
 
         if terminal or step >= max_step_per_episode:
             terminal_end = True
             if step >= max_step_per_episode or not env.metadata.get('semantics.autoreset'):
                 last_state = env.reset()
-            last_features = policy.get_initial_features()
+            last_feature_p = policy_net.get_initial_features()
+            last_feature_v = value_net.get_initial_features()
             break
 
     # once we have enough experience, yield it, and have the ThreadRunner place it on a queue
@@ -317,16 +330,22 @@ class PCL(object):
         self.cut_end = cut_end
         self.clip_min = clip_min
         if self.is_lstm:
-            self.pi = pi = LSTMPolicy(env.observation_space, env.action_space)
+            self.policy_network = LSTMPolicy(env.observation_space, env.action_space,
+                                     is_policy_network=True)
+            self.value_network =  LSTMPolicy(env.observation_space, env.action_space,
+                                     is_policy_network=False)
         else:
-            self.pi = pi = LinearPolicy(env.observation_space, env.action_space)
-        self.action_ph = tf.placeholder(tf.float32, [None, pi.action_dim], name="action")
+            self.policy_network = LinearPolicy(env.observation_space, env.action_space,
+                                       is_policy_network=True)
+            self.value_network = LinearPolicy(env.observation_space, env.action_space,
+                                   is_policy_network=False)
+        self.action_ph = tf.placeholder(tf.float32, [None, self.policy_network.action_dim],
+                                        name="action")
         self.discount_m_ph = tf.placeholder(tf.float32, [None, None], name="discount_m")
         self.value_m_ph = tf.placeholder(tf.float32, [None, None], name="value_m")
         self.reward_ph = tf.placeholder(tf.float32, [None], name="reward")
         self.discounted_r_ph = tf.placeholder(tf.float32, [None], name="discounted_r")
-        # self.values = tf.concat([pi.values[:-1], self.reward_ph[-1:]], 0)
-        self.values = pi.values
+        self.values = self.value_network.values
         self.queue = queue.Queue(5)
         self.local_steps = 0
         self.replay_buffer = ReplayBuffer(alpha=alpha)
@@ -335,7 +354,8 @@ class PCL(object):
         T = tf.shape(self.action_ph)[0]
         d = tf.cond(tf.constant(self.d) < T, lambda: tf.constant(self.d), lambda: T)
         # Calculate log pi from sampled actions
-        log_prob_tf = tf.log(tf.clip_by_value(self.pi.logits[:-1, :], self.clip_min, 1.0))
+        log_prob_tf = tf.log(tf.clip_by_value(self.policy_network.logits[:-1, :],
+                                              self.clip_min, 1.0))
         log_pi = tf.reduce_sum(log_prob_tf * self.action_ph, [1])
         # Discounted action distribution
         g = tf.reshape(tf.matmul(self.discount_m_ph, log_pi[:, None]), [-1])
@@ -346,7 +366,8 @@ class PCL(object):
         self.c = consistency
 
         # Calculation of entropy for report
-        entropy = -tf.reduce_mean(tf.reduce_sum(log_prob_tf*self.pi.logits[:-1, :], axis=1))
+        entropy = log_prob_tf * self.policy_network.logits[:-1, :]
+        entropy = -tf.reduce_mean(tf.reduce_sum(entropy, axis=1))
 
         # Calculation of losses
         self.pi_loss = tf.reduce_mean(consistency ** 2)
@@ -355,11 +376,11 @@ class PCL(object):
 
         # Entropy regularized reward of sample (err): e.q. (15)
         gammas = tf.pow(gamma, tf.cast(tf.range(T), tf.float32))
-        err = tf.reduce_sum(gammas * (self.reward_ph - tau*log_pi))
+        err = tf.reduce_sum(gammas * (self.reward_ph - tau * log_pi))
 
         # Optimizer for policy and value function
         opt_pi = tf.train.AdamOptimizer(actor_learning_rate)
-        opt_value = tf.train.AdamOptimizer(actor_learning_rate*critic_weight)
+        opt_value = tf.train.AdamOptimizer(actor_learning_rate * critic_weight)
 
         # Summary
         tf.summary.scalar("loss", self.pi_loss)
@@ -367,8 +388,8 @@ class PCL(object):
         tf.summary.scalar("entropy regularized reward", err)
         self.summary_op = tf.summary.merge_all()
 
-        self.train_op = [opt_pi.minimize(self.pi_loss, var_list=pi.theta),
-                         opt_value.minimize(self.v_loss, var_list=pi.phi)]
+        self.train_op = [opt_pi.minimize(self.pi_loss, var_list=self.policy_network.variable),
+                         opt_value.minimize(self.v_loss, var_list=self.value_network.variable)]
 
         self.report = {"entropy": entropy, "loss": self.v_loss, "err": err}
         self.summary_op = tf.summary.merge_all()
@@ -392,8 +413,10 @@ class PCL(object):
         and updates the parameters.  The update is then sent to the parameter
         server.
         """
-        rollout = env_runner(sess, self.env, self.pi, self.max_step_per_episode,
-                              self.summary_writer, visualise, is_lstm=is_lstm)
+        rollout = env_runner(sess, self.env, self.policy_network, self.value_network,
+                             self.max_step_per_episode, self.summary_writer,
+                             visualise, is_lstm=is_lstm)
+
 
         # self.queue.put(rollout, timeout=1.0)
         # rollout = self.pull_batch_from_queue()
@@ -406,11 +429,12 @@ class PCL(object):
         if visualise or report:
             d = self.d if self.d < rollout.T else rollout.T
             loss = fetched["report"]["loss"]
-            loss = np.mean(loss)/d
+            loss = np.mean(loss) / d
             entropy = fetched["report"]["entropy"]
             erer = fetched["report"]["err"]
-            print("@{2: >5}; reward : {0: >8.3}, entropy regularized reward : {4: >8.3}, loss : {1: >8.3}, entropy : {3: >8.3}"
-                  .format(np.sum(rollout.rewards), loss, step, entropy, erer))
+            print(
+            "@{2: >5}; reward : {0: >8.3}, entropy regularized reward : {4: >8.3}, loss : {1: >8.3}, entropy : {3: >8.3}"
+            .format(np.sum(rollout.rewards), loss, step, entropy, erer))
 
         self.replay_buffer.add(rollout)
         if self.replay_buffer.trainable:
@@ -426,18 +450,20 @@ class PCL(object):
         batch = process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
 
         feed_dict = {
-            self.pi.x_v: batch.state,
-            self.pi.x_pi: batch.state,
+            self.value_network.x: batch.state,
+            self.policy_network.x: batch.state,
             self.action_ph: batch.action,
-            self.reward_ph : batch.reward,
-            self.discounted_r_ph : batch.discounted_r,
-            self.discount_m_ph : batch.discount_m,
-            self.value_m_ph : batch.value_m
+            self.reward_ph: batch.reward,
+            self.discounted_r_ph: batch.discounted_r,
+            self.discount_m_ph: batch.discount_m,
+            self.value_m_ph: batch.value_m
         }
 
         if self.is_lstm:
-            feed_dict[self.pi.state_in[0]] = batch.features[0]
-            feed_dict[self.pi.state_in[1]] = batch.features[1]
+            feed_dict[self.policy_network.state_in[0]] = batch.feature_p[0]
+            feed_dict[self.policy_network.state_in[1]] = batch.feature_p[1]
+            feed_dict[self.value_network.state_in[0]] = batch.feature_v[0]
+            feed_dict[self.value_network.state_in[1]] = batch.feature_v[1]
 
         fetches = {"train_op": self.train_op}
         if report or self.summary_writer is not None:
