@@ -54,108 +54,121 @@ def relu(x, size, name, initializer=None, bias_init=0):
     return tf.nn.relu(y, "relu")
 
 
-class LSTMPolicy(object):
-    def __init__(self, ob_space, ac_space, size=128):
-        with tf.variable_scope("common"):
-            self.action_dim, self.action_decoder = get_action_space(ac_space)
-            self.x, x = preprocess_observation_space(ob_space)
-            # introduce a "fake" batch dimension of 1 after flatten so that
-            #  we can do LSTM over time dim
-            # x is converted in shape of [1, time step, ob_space]
-            x = tf.expand_dims(x, [0])
-
-            if use_tf100_api:
-                cell = rnn.BasicLSTMCell(size, state_is_tuple=True)
-            else:
-                cell = rnn.rnn_cell.BasicLSTMCell(size, state_is_tuple=True)
-            self.state_size = cell.state_size
-
-            # batch size is always 1
-            c_init = np.zeros((1, cell.state_size.c), np.float32)
-            h_init = np.zeros((1, cell.state_size.h), np.float32)
-            self.state_init = [c_init, h_init]
-            c_in = tf.placeholder(tf.float32, [1, cell.state_size.c])
-            h_in = tf.placeholder(tf.float32, [1, cell.state_size.h])
-            self.state_in = [c_in, h_in]
-
-            if use_tf100_api:
-                state_in = rnn.LSTMStateTuple(c_in, h_in)
-            else:
-                state_in = rnn.rnn_cell.LSTMStateTuple(c_in, h_in)
-            lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
-                cell, x, initial_state=state_in,
-                time_major=False)
-            lstm_c, lstm_h = lstm_state
-            x = tf.squeeze(lstm_outputs, axis=0)
-
-        with tf.variable_scope("theta"):
-            hidden_theta = relu(x, 50, "dense_0")
-            i = 0
-            for i in range(0):
-                hidden_theta = relu(hidden_theta, 50, "hidden{}".format(i+1))
-            last = relu(hidden_theta, self.action_dim, "dense_1")
-            self.logits = tf.nn.softmax(last, name="softmax")
-
-        with tf.variable_scope("phi"):
-            hidden_phi = relu(x, 50, "dense_0")
-            for i in range(1):
-                hidden_phi = relu(hidden_phi, 50, "hidden{}".format(i+1))
-            self.values = tf.reshape(relu(hidden_phi, 1, "dense_1"), [-1])
-        self.features = [lstm_c[:1, :], lstm_h[:1, :]]
-        common_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "common")
-        self.theta = common_var + tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
-        self.phi = common_var + tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "phi")
-
-    def get_initial_features(self):
-        return self.state_init
-
-    def act(self, state, c, h):
-        sess = tf.get_default_session()
-        return sess.run({"logits": self.logits, "features": self.features},
-                        {self.x: [state], self.state_in[0]: c, self.state_in[1]: h})
-
-    def value(self, ob, c, h):
-        sess = tf.get_default_session()
-        return sess.run(self.values,
-                        {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})
-
-
 class LinearPolicy(object):
-    def __init__(self, ob_space, ac_space, n_hidden = 50):
+    def __init__(self, ob_space, ac_space, n_hidden = 50, is_policy_network=True):
         self.n_hidden = n_hidden
-        # First dimension is the number of steps in an episode
-        self.action_dim, self.action_decoder = get_action_space(ac_space)
-
-        with tf.variable_scope("theta"):
-            self.x_pi, x_pi = preprocess_observation_space(ob_space, n_hidden)
-            hidden_pi = relu(x_pi, 50, "hidden0", normalized_columns_initializer())
-            i = 0
-            for i in range(0):
-                hidden_pi = relu(hidden_pi, 50, "hidden{}".format(i+1), normalized_columns_initializer())
-            hidden_pi = relu(hidden_pi, self.action_dim, "hidden{}".format(i+1), normalized_columns_initializer())
-            self.logits = tf.nn.softmax(hidden_pi, name="softmax")
-
-        with tf.variable_scope("phi"):
-            self.x_v, x_v = preprocess_observation_space(ob_space, n_hidden)
-            hidden_v = relu(x_v, 50, "hidden0", normalized_columns_initializer())
-            for i in range(1):
-                hidden_v = linear(hidden_v, 50, "hidden{}".format(i+1), normalized_columns_initializer())
-            self.values = tf.reshape(linear(hidden_v, 1, "value", normalized_columns_initializer()), [-1])
-
-        # Collecting trainable variables
-        self.theta = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "theta")
-        self.phi = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "phi")
+        if is_policy_network:
+            self.action_dim, self.action_decoder = get_action_space(ac_space)
+            with tf.variable_scope("policy"):
+                # First dimension is the number of steps in an episode
+                self.x_pi, x_pi = preprocess_observation_space(ob_space)
+                self._build_policy_network()
+            self.variable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "policy")
+        else:
+            with tf.variable_scope("value"):
+                self.x_v, x_v = preprocess_observation_space(ob_space)
+                self._build_value_network()
+            self.variable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "value")
 
     def get_initial_features(self):
         return [None, None]
 
     def act(self, state, *_):
         sess = tf.get_default_session()
-        return sess.run({"logits": self.logits}, {self.x_pi: [state]})
+        return sess.run({"logit": self.logits}, {self.x_pi: [state]})
 
     def value(self, state, *_):
         sess = tf.get_default_session()
-        return sess.run(self.values, {self.x_v: [state]})
+        return sess.run({"value": self.values}, {self.x_v: [state]})
+
+    def _build_value_network(self):
+        hidden_v = relu(self.x_v, 50, "hidden0", normalized_columns_initializer())
+        for i in range(1):
+            hidden_v = linear(hidden_v, 50, "hidden{}".format(i+1), normalized_columns_initializer())
+        self.values = tf.reshape(linear(hidden_v, 1, "value", normalized_columns_initializer()), [-1])
+
+    def _build_policy_network(self):
+        hidden_pi = relu(self.x_pi, 50, "hidden0", normalized_columns_initializer())
+        i = 0
+        for i in range(0):
+            hidden_pi = relu(hidden_pi, 50, "hidden{}".format(i+1), normalized_columns_initializer())
+        hidden_pi = relu(hidden_pi, self.action_dim, "hidden{}".format(i+1), normalized_columns_initializer())
+        self.logits = tf.nn.softmax(hidden_pi, name="softmax")
+
+
+class LSTMPolicy(LinearPolicy):
+    def __init__(self, ob_space, ac_space, size=128, is_policy_network=True):
+        # with tf.variable_scope("common"):
+        #     self.action_dim, self.action_decoder = get_action_space(ac_space)
+        #     self.x, x = preprocess_observation_space(ob_space)
+        #     # introduce a "fake" batch dimension of 1 after flatten so that
+        #     #  we can do LSTM over time dim
+        #     # x is converted in shape of [1, time step, ob_space]
+
+        if is_policy_network:
+            self.action_dim, self.action_decoder = get_action_space(ac_space)
+            with tf.variable_scope("policy"):
+                self.x, x = preprocess_observation_space(ob_space)
+                x = self._build_lstm_network(x, size)
+
+                hidden_theta = relu(x, 50, "dense_0")
+                i = 0
+                for i in range(0):
+                    hidden_theta = relu(hidden_theta, 50, "hidden{}".format(i+1))
+                last = relu(hidden_theta, self.action_dim, "dense_1")
+                self.logits = tf.nn.softmax(last, name="softmax")
+
+        else:
+            with tf.variable_scope("value"):
+                self.x, x = preprocess_observation_space(ob_space)
+                x = self._build_lstm_network(x, size)
+
+                hidden_phi = relu(x, 50, "dense_0")
+                for i in range(1):
+                    hidden_phi = relu(hidden_phi, 50, "hidden{}".format(i+1))
+                self.values = tf.reshape(relu(hidden_phi, 1, "dense_1"), [-1])
+        self.variable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+
+    def _build_lstm_network(self, x, size):
+        x = tf.expand_dims(x, [0])
+
+        if use_tf100_api:
+            cell = rnn.BasicLSTMCell(size, state_is_tuple=True)
+        else:
+            cell = rnn.rnn_cell.BasicLSTMCell(size, state_is_tuple=True)
+        self.state_size = cell.state_size
+
+        # batch size is always 1
+        c_init = np.zeros((1, cell.state_size.c), np.float32)
+        h_init = np.zeros((1, cell.state_size.h), np.float32)
+        self.state_init = [c_init, h_init]
+        c_in = tf.placeholder(tf.float32, [1, cell.state_size.c])
+        h_in = tf.placeholder(tf.float32, [1, cell.state_size.h])
+        self.state_in = [c_in, h_in]
+
+        if use_tf100_api:
+            state_in = rnn.LSTMStateTuple(c_in, h_in)
+        else:
+            state_in = rnn.rnn_cell.LSTMStateTuple(c_in, h_in)
+        lstm_outputs, self.features = tf.nn.dynamic_rnn(
+            cell, x, initial_state=state_in,
+            time_major=False)
+        # lstm_c, lstm_h = lstm_state
+        x = tf.squeeze(lstm_outputs, axis=0)
+        return x
+
+    def get_initial_features(self):
+        return self.state_init
+
+    def act(self, state, c, h):
+        sess = tf.get_default_session()
+        return sess.run({"logit": self.logits, "feature": self.features},
+                        {self.x: [state], self.state_in[0]: c, self.state_in[1]: h})
+
+    def value(self, ob, c, h):
+        sess = tf.get_default_session()
+        return sess.run({"value": self.values, "feature": self.features},
+                        {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})
 
 
 def get_action_space(action_space):
