@@ -1,4 +1,5 @@
 import gym
+import gym_maze
 from collections import namedtuple
 import numpy as np
 import tensorflow as tf

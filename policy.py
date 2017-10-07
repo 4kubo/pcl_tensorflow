@@ -61,34 +61,33 @@ class LinearPolicy(object):
             self.action_dim, self.action_decoder = get_action_space(ac_space)
             with tf.variable_scope("policy"):
                 # First dimension is the number of steps in an episode
-                self.x_pi, x_pi = preprocess_observation_space(ob_space)
+                self.x, x = preprocess_observation_space(ob_space)
                 self._build_policy_network()
-            self.variable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "policy")
         else:
             with tf.variable_scope("value"):
-                self.x_v, x_v = preprocess_observation_space(ob_space)
+                self.x, x = preprocess_observation_space(ob_space)
                 self._build_value_network()
-            self.variable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "value")
+        self.variable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
 
     def get_initial_features(self):
         return [None, None]
 
     def act(self, state, *_):
         sess = tf.get_default_session()
-        return sess.run({"logit": self.logits}, {self.x_pi: [state]})
+        return sess.run({"logit": self.logits}, {self.x: [state]})
 
     def value(self, state, *_):
         sess = tf.get_default_session()
-        return sess.run({"value": self.values}, {self.x_v: [state]})
+        return sess.run({"value": self.values}, {self.x: [state]})
 
     def _build_value_network(self):
-        hidden_v = relu(self.x_v, 50, "hidden0", normalized_columns_initializer())
+        hidden_v = relu(self.x, 50, "hidden0", normalized_columns_initializer())
         for i in range(1):
             hidden_v = linear(hidden_v, 50, "hidden{}".format(i+1), normalized_columns_initializer())
         self.values = tf.reshape(linear(hidden_v, 1, "value", normalized_columns_initializer()), [-1])
 
     def _build_policy_network(self):
-        hidden_pi = relu(self.x_pi, 50, "hidden0", normalized_columns_initializer())
+        hidden_pi = relu(self.x, 50, "hidden0", normalized_columns_initializer())
         i = 0
         for i in range(0):
             hidden_pi = relu(hidden_pi, 50, "hidden{}".format(i+1), normalized_columns_initializer())
