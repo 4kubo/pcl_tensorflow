@@ -1,5 +1,4 @@
 import gym
-import gym_maze
 from collections import namedtuple
 import numpy as np
 import tensorflow as tf
@@ -129,7 +128,7 @@ def main(_):
             total_step += 1
 
 
-def consistency(values, rewards, log_pies, T, d, gamma, tau, cut_end=True):
+def consistency(values, rewards, log_pies, T, d, gamma, tau, is_terminal, cut_end=True):
     """
     Calculate path consistency
     Here, we use end of samples
@@ -155,8 +154,8 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau, cut_end=True):
     # Gamma discounted values
     value_m = -np.eye(T, T + 1) + np.eye(T, T + 1, k=d)
     value_m[1 == value_m] = gamma ** d
-    value_m[T - d:, -1] = [gamma ** (d - i) for i in range(d)]
-    # value_m[T - d:, -1] = [0]*d
+    value_m[T - d:, -1] = 0 if is_terminal else [gamma ** (d - i) for i in range(d)]
+    # value_m[T - d:, -1] = [gamma ** (d - i) for i in range(d)]
     if cut_end:
         discount_m = discount_m[:T - d + 1, :]
         value_m = value_m[:T - d + 1, :]
@@ -191,7 +190,7 @@ def process_rollout(rollout, d, gamma, tau, cut_end=True):
     values = np.asarray(rollout.values)
     log_pies = np.asarray(rollout.log_pies)
     batch_consistency, discounted_r, discount_m, value_m \
-        = consistency(values, rewards, log_pies, rollout.T, d, gamma, tau, cut_end)
+        = consistency(values, rewards, log_pies, rollout.T, d, gamma, tau, rollout.terminal, cut_end)
 
     feature_p, feature_v = rollout.features
     return Batch(batch_states, batch_actions, batch_consistency, rollout.terminal,
