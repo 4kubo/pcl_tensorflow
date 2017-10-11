@@ -3,6 +3,8 @@ import gym
 import tensorflow as tf
 import tensorflow.contrib.rnn as rnn
 import distutils
+from keras.models import Sequential
+from keras.layers import Dense, Activation
 
 use_tf100_api = distutils.version.LooseVersion(tf.VERSION) >= distutils.version.LooseVersion('1.0.0')
 
@@ -61,12 +63,12 @@ class LinearPolicy(object):
             self.action_dim, self.action_decoder = get_action_space(ac_space)
             with tf.variable_scope("policy"):
                 # First dimension is the number of steps in an episode
-                self.x, x = preprocess_observation_space(ob_space)
-                self._build_policy_network(x)
+                self.x, x, model = preprocess_observation_space(ob_space)
+                self._build_policy_network(x, model)
         else:
             with tf.variable_scope("value"):
-                self.x, x = preprocess_observation_space(ob_space)
-                self._build_value_network(x)
+                self.x, x, model = preprocess_observation_space(ob_space)
+                self._build_value_network(x, model)
         self.variable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
 
     def get_initial_features(self):
@@ -80,19 +82,29 @@ class LinearPolicy(object):
         sess = tf.get_default_session()
         return sess.run({"value": self.values}, {self.x: [state]})
 
-    def _build_value_network(self, x):
-        hidden_v = relu(x, 50, "hidden0", normalized_columns_initializer())
+    def _build_value_network(self, x, model):
+        model.add(Dense(self.n_hidden))
+        model.add(Activation("relu"))
+        # hidden_v = relu(x, 50, "hidden0", normalized_columns_initializer())
         for i in range(1):
-            hidden_v = linear(hidden_v, 50, "hidden{}".format(i+1), normalized_columns_initializer())
-        self.values = tf.reshape(linear(hidden_v, 1, "value", normalized_columns_initializer()), [-1])
+            model.add(Dense(self.n_hidden, activation="relu"))
+            # hidden_v = linear(hidden_v, 50, "hidden{}".format(i+1), normalized_columns_initializer())
+        # self.values = tf.reshape(linear(hidden_v, 1, "value", normalized_columns_initializer()), [-1])
+        model.add(Dense(1, activation="linear"))
+        self.values = model.output
 
-    def _build_policy_network(self, x):
-        hidden_pi = relu(x, 50, "hidden0", normalized_columns_initializer())
-        i = 0
+    def _build_policy_network(self, x, model):
+        # hidden_pi = relu(x, 50, "hidden0", normalized_columns_initializer())
+        # i = 0
+        model.add(Dense(self.n_hidden, activation="relu"))
         for i in range(0):
-            hidden_pi = relu(hidden_pi, 50, "hidden{}".format(i+1), normalized_columns_initializer())
-        hidden_pi = relu(hidden_pi, self.action_dim, "hidden{}".format(i+1), normalized_columns_initializer())
-        self.logits = tf.nn.softmax(hidden_pi, name="softmax")
+            model.add(Dense(self.n_hidden, activation="relu"))
+        model.add(Dense(self.action_dim, activation="relu"))
+        model.add(Activation("softmax"))
+        self.logits = model.output
+        #     hidden_pi = relu(hidden_pi, 50, "hidden{}".format(i+1), normalized_columns_initializer())
+        # hidden_pi = relu(hidden_pi, self.action_dim, "hidden{}".format(i+1), normalized_columns_initializer())
+        # self.logits = tf.nn.softmax(hidden_pi, name="softmax")
 
 
 class LSTMPolicy(LinearPolicy):
@@ -212,10 +224,16 @@ def preprocess_observation_space(observation_space, n_hidden=32):
         # e.g. CartPole
         elif len(observation_space.shape) is 1:
             print("observation dim :", observation_space.shape[0])
-            x = x_placeholder = tf.placeholder(tf.float32, [None, observation_space.shape[0]])
+            # [batch, seq_length, obs_dim]
+            x = x_placeholder = tf.placeholder(tf.float32, [None, None, observation_space.shape[0]])
+            model = Sequential()
+            model.add(Dense(n_hidden, input_shape=[None, observation_space.shape[0]]))
+            model.add((Activation("relu")))
             for i in range(2):
-                x = relu(x, n_hidden, 'common{}'.format(i), normalized_columns_initializer())
-            return x_placeholder, x
+                model.add(Dense(n_hidden))
+                model.add(Activation("relu"))
+                # x = relu(x, n_hidden, 'common{}'.format(i), normalized_columns_initializer())
+            return x_placeholder, x, model
         else:
             print("Not implemented yet!")
     # Discrete
