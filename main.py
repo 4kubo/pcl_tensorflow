@@ -155,8 +155,14 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau, is_terminal, cut_en
     # Gamma discounted values
     value_m = -np.eye(T, T + 1) + np.eye(T, T + 1, k=d)
     value_m[1 == value_m] = gamma ** d
-    value_m[T - d:, -1] = 0 if is_terminal else [gamma ** (d - i) for i in range(d)]
-    # value_m[T - d:, -1] = [gamma ** (d - i) for i in range(d)]
+
+    # Terminal condition
+    if is_terminal:
+        discount_m[T - d:, :] = 0
+        value_m[T - d:, -1] = 0
+    else:
+        value_m[T - d:, -1] = [gamma ** (d - i) for i in range(d)]
+
     if cut_end:
         discount_m = discount_m[:T - d + 1, :]
         value_m = value_m[:T - d + 1, :]
@@ -165,7 +171,6 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau, is_terminal, cut_en
     discounted_values = value_m.dot(values[:, :, 0, 0])
 
     # Gamma discounted log pies
-    # discount_m[T - d:, :] = 0
     g = discount_m.dot(log_pies)
 
     consistency = discounted_values[:, 0] + discounted_rewards - tau * g
@@ -369,13 +374,12 @@ class PCL(object):
         self.c = consistency
 
         # Calculation of entropy for report
-        entropy = log_prob_tf * self.policy_network.logits[:, :-1, :]
-        entropy = -tf.reduce_mean(tf.reduce_sum(entropy, axis=1))
+        entropy = -log_prob_tf * self.policy_network.logits[:, :-1, :]
+        entropy = tf.reduce_mean(tf.reduce_sum(entropy, axis=2))
 
         # Calculation of losses
-        self.pi_loss = tf.reduce_mean(consistency ** 2, axis=1)
-        self.v_loss = tf.reduce_mean(consistency ** 2, axis=1) \
-                      # + (self.values[-1] - self.reward_ph[-1]) ** 2
+        self.pi_loss = tf.reduce_mean(consistency ** 2, axis=1) / tau
+        self.v_loss = tf.reduce_mean(consistency ** 2, axis=1)
 
         # Entropy regularized reward of sample (err): e.q. (15)
         gammas = tf.pow(gamma, tf.cast(tf.range(T), tf.float32))

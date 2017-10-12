@@ -2,7 +2,7 @@ import numpy as np
 
 
 class ReplayBuffer(object):
-    def __init__(self, max_length=10000, batch_size=100, alpha=0.5):
+    def __init__(self, max_length=10000, batch_size=500, alpha=0.5):
         self.max_length = max_length
         self.batch_size = batch_size
         self.alpha = alpha
