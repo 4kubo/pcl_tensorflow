@@ -447,8 +447,6 @@ class PCL(object):
         if self.replay_buffer.trainable:
             rollouts = self.replay_buffer.sample(batch_size)
             self._batch_train(rollouts, report, sess)
-            # for rollout in rollouts:
-            #     batch, fetched = self.train(rollout, False, sess)
 
         if self.summary_writer is not None:
             self.summary_writer.add_summary(fetched["summary_op"])
