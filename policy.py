@@ -69,6 +69,7 @@ class LinearPolicy(object):
             with tf.variable_scope("value"):
                 self.x, x, model = preprocess_observation_space(ob_space)
                 self._build_value_network(x, model)
+        self.x = model.input
         self.variable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
 
     def get_initial_features(self):
@@ -76,11 +77,11 @@ class LinearPolicy(object):
 
     def act(self, state, *_):
         sess = tf.get_default_session()
-        return sess.run({"logit": self.logits}, {self.x: [state]})
+        return sess.run({"logit": self.logits}, {self.x: [[state]]})
 
     def value(self, state, *_):
         sess = tf.get_default_session()
-        return sess.run({"value": self.values}, {self.x: [state]})
+        return sess.run({"value": self.values}, {self.x: [[state]]})
 
     def _build_value_network(self, x, model):
         model.add(Dense(self.n_hidden))

@@ -162,7 +162,7 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau, is_terminal, cut_en
         value_m = value_m[:T - d + 1, :]
         discounted_rewards = discounted_rewards[:T - d + 1]
 
-    discounted_values = value_m.dot(values)
+    discounted_values = value_m.dot(values[:, :, 0, 0])
 
     # Gamma discounted log pies
     # discount_m[T - d:, :] = 0
@@ -239,12 +239,12 @@ class PartialRollout(object):
 def sample_log_pi(action_logit, action_dim, clip_min=1e-10):
     # Clipping to avoid log 0
     np.clip(action_logit, clip_min, 1.0, out=action_logit)
-    action_logit = np.squeeze(action_logit, 0)
+    action_logit = np.squeeze(action_logit)
     # Normalization
     sum_ = np.sum(action_logit)
     pi = action_logit / sum_
     # Sample action from current policy
-    action_id = np.random.choice(np.arange(pi.shape[0]), p=pi)
+    action_id = np.random.choice(np.arange(len(pi)), p=pi)
     log_pi = np.log(pi)
     log_pi = log_pi[action_id]
     # Coding of action
@@ -330,6 +330,7 @@ class PCL(object):
         self.visualise = visualise
         self.cut_end = cut_end
         self.clip_min = clip_min
+        self.obs_space = env.observation_space
         if self.is_lstm:
             self.policy_network = LSTMPolicy(env.observation_space, env.action_space,
                                      is_policy_network=True)
@@ -340,51 +341,52 @@ class PCL(object):
                                        is_policy_network=True)
             self.value_network = LinearPolicy(env.observation_space, env.action_space,
                                    is_policy_network=False)
-        self.action_ph = tf.placeholder(tf.float32, [None, self.policy_network.action_dim],
+        self.action_ph = tf.placeholder(tf.float32, [None, None, self.policy_network.action_dim],
                                         name="action")
-        self.discount_m_ph = tf.placeholder(tf.float32, [None, None], name="discount_m")
-        self.value_m_ph = tf.placeholder(tf.float32, [None, None], name="value_m")
-        self.reward_ph = tf.placeholder(tf.float32, [None], name="reward")
-        self.discounted_r_ph = tf.placeholder(tf.float32, [None], name="discounted_r")
-        self.values = self.value_network.values
+        self.discount_m_ph = tf.placeholder(tf.float32, [None, None, None], name="discount_m")
+        self.value_m_ph = tf.placeholder(tf.float32, [None, None, None], name="value_m")
+        self.reward_ph = tf.placeholder(tf.float32, [None, None], name="reward")
+        self.discounted_r_ph = tf.placeholder(tf.float32, [None, None], name="discounted_r")
+        self.values = self.value_network.values[:, :, 0]
         self.queue = queue.Queue(5)
         self.local_steps = 0
         self.replay_buffer = ReplayBuffer(alpha=alpha)
 
         # The length of one episode
-        T = tf.shape(self.action_ph)[0]
+        T = tf.shape(self.action_ph)[1]
         d = tf.cond(tf.constant(self.d) < T, lambda: tf.constant(self.d), lambda: T)
         # Calculate log pi from sampled actions
-        log_prob_tf = tf.log(tf.clip_by_value(self.policy_network.logits[:-1, :],
+        log_prob_tf = tf.log(tf.clip_by_value(self.policy_network.logits[:, :-1, :],
                                               self.clip_min, 1.0))
-        log_pi = tf.reduce_sum(log_prob_tf * self.action_ph, [1])
+        log_pi = tf.reduce_sum(log_prob_tf * self.action_ph, [-1])
         # Discounted action distribution
-        g = tf.reshape(tf.matmul(self.discount_m_ph, log_pi[:, None]), [-1])
+        g = tf.einsum("ijk,ik->ij", self.discount_m_ph, log_pi)
         # Discounted values
-        discounted_values = tf.reshape(tf.matmul(self.value_m_ph, self.values[:, None]), [-1])
+        # discounted_values = tf.reshape(tf.matmul(self.value_m_ph, self.values[:, None]), [-1])
+        discounted_values = tf.einsum("ijk,ik->ij", self.value_m_ph, self.values)
         # Path Consistency
         consistency = discounted_values + self.discounted_r_ph - self.tau*g
         self.c = consistency
 
         # Calculation of entropy for report
-        entropy = log_prob_tf * self.policy_network.logits[:-1, :]
+        entropy = log_prob_tf * self.policy_network.logits[:, :-1, :]
         entropy = -tf.reduce_mean(tf.reduce_sum(entropy, axis=1))
 
         # Calculation of losses
-        self.pi_loss = tf.reduce_mean(consistency ** 2)
-        self.v_loss = tf.reduce_mean(consistency ** 2) \
-                      + (self.values[-1] - self.reward_ph[-1]) ** 2
+        self.pi_loss = tf.reduce_mean(consistency ** 2, axis=1)
+        self.v_loss = tf.reduce_mean(consistency ** 2, axis=1) \
+                      # + (self.values[-1] - self.reward_ph[-1]) ** 2
 
         # Entropy regularized reward of sample (err): e.q. (15)
         gammas = tf.pow(gamma, tf.cast(tf.range(T), tf.float32))
-        err = tf.reduce_sum(gammas * (self.reward_ph - tau * log_pi))
+        err = tf.reduce_mean(tf.reduce_sum(gammas[None, :] * (self.reward_ph - tau * log_pi), axis=1))
 
         # Optimizer for policy and value function
         opt_pi = tf.train.AdamOptimizer(actor_learning_rate)
         opt_value = tf.train.AdamOptimizer(actor_learning_rate * critic_weight)
 
         # Summary
-        tf.summary.scalar("loss", self.pi_loss)
+        tf.summary.scalar("loss", tf.reduce_mean(self.pi_loss))
         tf.summary.scalar("reward", tf.reduce_sum(self.reward_ph))
         tf.summary.scalar("entropy regularized reward", err)
         self.summary_op = tf.summary.merge_all()
@@ -440,8 +442,9 @@ class PCL(object):
         self.replay_buffer.add(rollout)
         if self.replay_buffer.trainable:
             rollouts = self.replay_buffer.sample(batch_size)
-            for rollout in rollouts:
-                batch, fetched = self.train(rollout, False, sess)
+            self._batch_train(rollouts, report, sess)
+            # for rollout in rollouts:
+            #     batch, fetched = self.train(rollout, False, sess)
 
         if self.summary_writer is not None:
             self.summary_writer.add_summary(fetched["summary_op"])
@@ -451,13 +454,13 @@ class PCL(object):
         batch = process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
 
         feed_dict = {
-            self.value_network.x: batch.state,
-            self.policy_network.x: batch.state,
-            self.action_ph: batch.action,
-            self.reward_ph: batch.reward,
-            self.discounted_r_ph: batch.discounted_r,
-            self.discount_m_ph: batch.discount_m,
-            self.value_m_ph: batch.value_m
+            self.value_network.x: [batch.state],
+            self.policy_network.x: [batch.state],
+            self.action_ph: [batch.action],
+            self.reward_ph: [batch.reward],
+            self.discounted_r_ph: [batch.discounted_r],
+            self.discount_m_ph: [batch.discount_m],
+            self.value_m_ph: [batch.value_m]
         }
 
         if self.is_lstm:
@@ -473,6 +476,101 @@ class PCL(object):
 
         fetched = sess.run(fetches, feed_dict=feed_dict)
         return batch, fetched
+
+    def _batch_train(self, rollouts, report, sess):
+        batch_state, batch_action, batch_reward, batch_discounted_r, batch_discount_m, batch_value_m =\
+            self._make_batches(rollouts)
+
+        feed_dict = {
+            self.value_network.x: batch_state,
+            self.policy_network.x: batch_state,
+            self.action_ph: batch_action,
+            self.reward_ph: batch_reward,
+            self.discounted_r_ph: batch_discounted_r,
+            self.discount_m_ph: batch_discount_m,
+            self.value_m_ph: batch_value_m
+        }
+
+        if self.is_lstm:
+            feed_dict[self.policy_network.state_in[0]] = batch.feature_p[0]
+            feed_dict[self.policy_network.state_in[1]] = batch.feature_p[1]
+            feed_dict[self.value_network.state_in[0]] = batch.feature_v[0]
+            feed_dict[self.value_network.state_in[1]] = batch.feature_v[1]
+
+        fetches = {"train_op": self.train_op}
+        if report or self.summary_writer is not None:
+            fetches["report"] = self.report
+            fetches["summary_op"] = self.summary_op
+
+        fetched = sess.run(fetches, feed_dict=feed_dict)
+        # return batch, fetched
+
+    def _make_batches(self, rollouts):
+        batch_size = len(rollouts)
+        max_t = max(r.T for r in rollouts)
+        obs_shape = list(rollouts[0].states[0].shape)
+
+        batch_list = [process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
+                      for rollout in rollouts]
+
+        # Initialization
+        batch_state = np.zeros([batch_size, max_t+1] + obs_shape)
+        batch_action = np.zeros((batch_size, max_t, self.policy_network.action_dim))
+        batch_reward = np.zeros((batch_size, max_t))
+        batch_discounted_r = np.zeros((batch_size, max_t))
+        batch_discount_m = np.zeros((batch_size, max_t, max_t))
+        batch_value_m = np.zeros((batch_size, max_t, max_t+1))
+
+        batch_state = self._padd_1d_batches(batch_state, [b.state for b in batch_list])
+        batch_action = self._padd_1d_batches(batch_action, [b.action for b in batch_list])
+        batch_reward = self._padd_1d_batches(batch_reward, [b.reward[:, None] for b in batch_list])
+        batch_discounted_r = self._padd_1d_batches(batch_discounted_r,
+                                                   [b.discounted_r[:, None] for b in batch_list])
+        batch_discount_m = self._padd_2d_batches(batch_discount_m,
+                                                 [b.discount_m for b in batch_list])
+        batch_value_m = self._padd_2d_batches(batch_value_m,
+                                                 [b.value_m for b in batch_list])
+        return batch_state, batch_action, batch_reward, batch_discounted_r,\
+               batch_discount_m, batch_value_m
+
+    def _padd_1d_batches(self, zeros, batch_list):
+        """
+
+        :param zeros(np.ndarray): An array to be padded with values in `batch_list`
+        :param batch_list:
+        :return:
+        """
+        n = np.prod(zeros.shape[2:]).astype(int)
+        t_max = zeros.shape[1] # The maximum length of the episodes in `batch_list`
+        # exec("grids=np.meshgrid({})".format(",".join("range({0})".format(i) for i in dims)))
+        indexes = np.concatenate([n*t_max*i+np.arange(n*t.shape[0])
+                                  for i, t in enumerate(batch_list)])
+
+        data = np.concatenate([np.ravel(b) for b in batch_list])
+        batches = np.ravel(zeros)
+        batches[indexes] = data
+        return batches.reshape(zeros.shape)
+
+    def _padd_2d_batches(self, zeros, batch_list):
+        """
+
+        :param zeros(np.ndarray): An array to be padded with values in `batch_list`
+        :param batch_list:
+        :return:
+        """
+        _, N, M = zeros.shape
+        # n = np.prod(zeros.shape[2:]).astype(int)
+        # t_max = zeros.shape[1] # The maximum length of the episodes in `batch_list`
+
+        indexes = np.concatenate([M*N*i + M*n + np.arange(batch.shape[1])
+                                  for i, batch in enumerate(batch_list)
+                                  for n in range(batch.shape[0])])
+
+
+        data = np.concatenate([np.ravel(b) for b in batch_list])
+        batches = np.ravel(zeros)
+        batches[indexes] = data
+        return batches.reshape(zeros.shape)
 
     def start(self, sess, summary_writer):
         self.summary_writer = summary_writer
