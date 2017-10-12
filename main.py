@@ -87,10 +87,11 @@ def main(_):
 
     total_step = 0
 
-    model = PCL(env, d=args.d, gamma=args.gamma, tau=args.tau,
-                actor_learning_rate=args.actor_learning_rate,
-                critic_weight=args.critic_weight, alpha=args.alpha, is_lstm=args.is_lstm,
-                visualise=args.visualise, max_step_per_episode=args.max_step_per_episode,
+    model = PCL(env, d=args.d, gamma=args.gamma,
+                actor_learning_rate=args.actor_learning_rate, alpha=args.alpha,
+                critic_weight=args.critic_weight, batch_size=args.batch_size,
+                is_lstm=args.is_lstm, visualise=args.visualise, tau=args.tau,
+                max_step_per_episode=args.max_step_per_episode,
                 cut_end=args.cut_end, clip_min=args.clip_min)
 
     init_all_op = tf.global_variables_initializer()
@@ -125,7 +126,7 @@ def main(_):
             else:
                 report = False
             model.process(sess, total_step, visualise, report,
-                          is_lstm=args.is_lstm, batch_size=args.batch_size)
+                          is_lstm=args.is_lstm)
             total_step += 1
 
 
@@ -268,9 +269,9 @@ def env_runner(sess, env, policy_net, value_net, max_step_per_episode,
     last_state = env.reset()
     if visualize:
         env.render()
-    last_feature_p = policy_net.get_initial_features()
-    last_feature_v = value_net.get_initial_features()
-    initial_value = value_net.value(last_state, *last_feature_v)["value"]
+    last_feature_p = policy_net.get_initial_features(1)
+    last_feature_v = value_net.get_initial_features(1)
+    initial_value = value_net.value([[last_state]], *last_feature_v)["value"]
     step = 0
     episode_reward = 0
     terminal_end = False
@@ -281,7 +282,7 @@ def env_runner(sess, env, policy_net, value_net, max_step_per_episode,
     while not terminal_end:
         step += 1
 
-        fetches = policy_net.act(last_state, *last_feature_p)
+        fetches = policy_net.act([[last_state]], *last_feature_p)
         action_logit = fetches["logit"]
         if is_lstm:
             feature_p = fetches["feature"]
@@ -290,7 +291,7 @@ def env_runner(sess, env, policy_net, value_net, max_step_per_episode,
         action_code = policy_net.action_decoder(action)
         state, reward, terminal, info = env.step(action_code)
 
-        fetches = value_net.value(state, *last_feature_v)
+        fetches = value_net.value([[state]], *last_feature_v)
         value = fetches["value"]
         if is_lstm:
             feature_v = fetches["feature"]
@@ -313,8 +314,8 @@ def env_runner(sess, env, policy_net, value_net, max_step_per_episode,
             terminal_end = True
             if step >= max_step_per_episode or not env.metadata.get('semantics.autoreset'):
                 last_state = env.reset()
-            last_feature_p = policy_net.get_initial_features()
-            last_feature_v = value_net.get_initial_features()
+            last_feature_p = policy_net.get_initial_features(1)
+            last_feature_v = value_net.get_initial_features(1)
             break
 
     # once we have enough experience, yield it, and have the ThreadRunner place it on a queue
@@ -323,13 +324,14 @@ def env_runner(sess, env, policy_net, value_net, max_step_per_episode,
 
 class PCL(object):
     def __init__(self, env, d=10, gamma=1.0, tau=0.01, actor_learning_rate=1e-4,
-                 critic_weight=0.1, alpha=0.5, is_lstm=False, visualise=False,
+                 critic_weight=0.1, alpha=0.5, batch_size=100, is_lstm=False, visualise=False,
                  max_step_per_episode=1000, cut_end=True, clip_min=1e-10):
         self.env = env
         self.d = d
         self.gamma = gamma
         self.tau = tau
         self.actor_learning_rate = actor_learning_rate
+        self.batch_size = batch_size
         self.is_lstm = is_lstm
         self.max_step_per_episode = max_step_per_episode
         self.visualise = visualise
@@ -494,10 +496,16 @@ class PCL(object):
         }
 
         if self.is_lstm:
-            feed_dict[self.policy_network.state_in[0]] = batch.feature_p[0]
-            feed_dict[self.policy_network.state_in[1]] = batch.feature_p[1]
-            feed_dict[self.value_network.state_in[0]] = batch.feature_v[0]
-            feed_dict[self.value_network.state_in[1]] = batch.feature_v[1]
+            # feed_dict[self.policy_network.state_in[0]] = batch.feature_p[0]
+            # feed_dict[self.policy_network.state_in[1]] = batch.feature_p[1]
+            # feed_dict[self.value_network.state_in[0]] = batch.feature_v[0]
+            # feed_dict[self.value_network.state_in[1]] = batch.feature_v[1]
+            feature_p = self.policy_network.get_initial_features(self.batch_size)
+            feature_v = self.value_network.get_initial_features(self.batch_size)
+            feed_dict[self.policy_network.state_in[0]] = feature_p[0]
+            feed_dict[self.policy_network.state_in[1]] = feature_p[1]
+            feed_dict[self.value_network.state_in[0]] = feature_v[0]
+            feed_dict[self.value_network.state_in[1]] = feature_v[1]
 
         fetches = {"train_op": self.train_op}
         if report or self.summary_writer is not None:

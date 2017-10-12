@@ -4,7 +4,7 @@ import tensorflow as tf
 import tensorflow.contrib.rnn as rnn
 import distutils
 from keras.models import Sequential
-from keras.layers import Dense, Activation
+from keras.layers import Dense, Activation, InputLayer
 
 use_tf100_api = distutils.version.LooseVersion(tf.VERSION) >= distutils.version.LooseVersion('1.0.0')
 
@@ -75,13 +75,13 @@ class LinearPolicy(object):
     def get_initial_features(self):
         return [None, None]
 
-    def act(self, state, *_):
+    def act(self, obsevation, *_):
         sess = tf.get_default_session()
-        return sess.run({"logit": self.logits}, {self.x: [[state]]})
+        return sess.run({"logit": self.logits}, {self.x: obsevation})
 
-    def value(self, state, *_):
+    def value(self, obsevation, *_):
         sess = tf.get_default_session()
-        return sess.run({"value": self.values}, {self.x: [[state]]})
+        return sess.run({"value": self.values}, {self.x: obsevation})
 
     def _build_value_network(self, x, model):
         model.add(Dense(self.n_hidden))
@@ -109,7 +109,8 @@ class LinearPolicy(object):
 
 
 class LSTMPolicy(LinearPolicy):
-    def __init__(self, ob_space, ac_space, size=128, is_policy_network=True):
+    def __init__(self, ob_space, ac_space, n_hidden=50, size=128, is_policy_network=True):
+        self.n_hidden = n_hidden
         # with tf.variable_scope("common"):
         #     self.action_dim, self.action_decoder = get_action_space(ac_space)
         #     self.x, x = preprocess_observation_space(ob_space)
@@ -120,29 +121,35 @@ class LSTMPolicy(LinearPolicy):
         if is_policy_network:
             self.action_dim, self.action_decoder = get_action_space(ac_space)
             with tf.variable_scope("policy"):
-                self.x, x = preprocess_observation_space(ob_space)
-                x = self._build_lstm_network(x, size)
+                self.x, x, model = preprocess_observation_space(ob_space)
+                x = self._build_lstm_network(model, size)
 
-                hidden_theta = relu(x, 50, "dense_0")
-                i = 0
-                for i in range(0):
-                    hidden_theta = relu(hidden_theta, 50, "hidden{}".format(i+1))
-                last = relu(hidden_theta, self.action_dim, "dense_1")
-                self.logits = tf.nn.softmax(last, name="softmax")
+                m = Sequential()
+                m.add(InputLayer(input_tensor=x))
+                self._build_policy_network(x, m)
+                # hidden_theta = relu(x, 50, "dense_0")
+                # i = 0
+                # for i in range(0):
+                #     hidden_theta = relu(hidden_theta, 50, "hidden{}".format(i+1))
+                # last = relu(hidden_theta, self.action_dim, "dense_1")
+                # self.logits = tf.nn.softmax(last, name="softmax")
 
         else:
             with tf.variable_scope("value"):
-                self.x, x = preprocess_observation_space(ob_space)
-                x = self._build_lstm_network(x, size)
-
-                hidden_phi = relu(x, 50, "dense_0")
-                for i in range(1):
-                    hidden_phi = relu(hidden_phi, 50, "hidden{}".format(i+1))
-                self.values = tf.reshape(relu(hidden_phi, 1, "dense_1"), [-1])
+                self.x, x, model = preprocess_observation_space(ob_space)
+                x = self._build_lstm_network(model, size)
+                m = Sequential()
+                m.add(InputLayer(input_tensor=x))
+                self._build_value_network(x, m)
+                # hidden_phi = relu(x, 50, "dense_0")
+                # for i in range(1):
+                #     hidden_phi = relu(hidden_phi, 50, "hidden{}".format(i+1))
+                # self.values = tf.reshape(linear(hidden_phi, 1, "dense_1"), [-1])
+        self.x = model.input
         self.variable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
 
-    def _build_lstm_network(self, x, size):
-        x = tf.expand_dims(x, [0])
+    def _build_lstm_network(self, model, size):
+        x = model.output
 
         if use_tf100_api:
             cell = rnn.BasicLSTMCell(size, state_is_tuple=True)
@@ -150,12 +157,8 @@ class LSTMPolicy(LinearPolicy):
             cell = rnn.rnn_cell.BasicLSTMCell(size, state_is_tuple=True)
         self.state_size = cell.state_size
 
-        # batch size is always 1
-        c_init = np.zeros((1, cell.state_size.c), np.float32)
-        h_init = np.zeros((1, cell.state_size.h), np.float32)
-        self.state_init = [c_init, h_init]
-        c_in = tf.placeholder(tf.float32, [1, cell.state_size.c])
-        h_in = tf.placeholder(tf.float32, [1, cell.state_size.h])
+        c_in = tf.placeholder(tf.float32, [None, cell.state_size.c])
+        h_in = tf.placeholder(tf.float32, [None, cell.state_size.h])
         self.state_in = [c_in, h_in]
 
         if use_tf100_api:
@@ -166,21 +169,26 @@ class LSTMPolicy(LinearPolicy):
             cell, x, initial_state=state_in,
             time_major=False)
         # lstm_c, lstm_h = lstm_state
-        x = tf.squeeze(lstm_outputs, axis=0)
+        # x = tf.squeeze(lstm_outputs, axis=0)
         return x
 
-    def get_initial_features(self):
+    def get_initial_features(self, batch_size):
+        # batch size is always 1
+        c_init = np.zeros((batch_size, self.state_size.c), np.float32)
+        h_init = np.zeros((batch_size, self.state_size.h), np.float32)
+        self.state_init = [c_init, h_init]
+
         return self.state_init
 
-    def act(self, state, c, h):
+    def act(self, obsevation, c, h):
         sess = tf.get_default_session()
         return sess.run({"logit": self.logits, "feature": self.features},
-                        {self.x: [state], self.state_in[0]: c, self.state_in[1]: h})
+                        {self.x: obsevation, self.state_in[0]: c, self.state_in[1]: h})
 
-    def value(self, ob, c, h):
+    def value(self, obsevation, c, h):
         sess = tf.get_default_session()
         return sess.run({"value": self.values, "feature": self.features},
-                        {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})
+                        {self.x: obsevation, self.state_in[0]: c, self.state_in[1]: h})
 
 
 def get_action_space(action_space):
