@@ -3,8 +3,9 @@ import gym
 import tensorflow as tf
 import tensorflow.contrib.rnn as rnn
 import distutils
-from keras.models import Sequential
-from keras.layers import Dense, Activation, InputLayer
+from keras.models import Sequential, Model
+from keras.layers import Dense, Activation, InputLayer, Input
+from keras.utils import np_utils
 
 use_tf100_api = distutils.version.LooseVersion(tf.VERSION) >= distutils.version.LooseVersion('1.0.0')
 
@@ -63,16 +64,16 @@ class LinearPolicy(object):
             self.action_dim, self.action_decoder = get_action_space(ac_space)
             with tf.variable_scope("policy"):
                 # First dimension is the number of steps in an episode
-                self.x, x, model = preprocess_observation_space(ob_space)
+                self.x, x, model, _ = preprocess_observation_space(ob_space)
                 self._build_policy_network(x, model)
         else:
             with tf.variable_scope("value"):
-                self.x, x, model = preprocess_observation_space(ob_space)
+                self.x, x, model, _ = preprocess_observation_space(ob_space)
                 self._build_value_network(x, model)
         self.x = model.input
         self.variable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
 
-    def get_initial_features(self):
+    def get_initial_features(self, _):
         return [None, None]
 
     def act(self, obsevation, *_):
@@ -121,7 +122,7 @@ class LSTMPolicy(LinearPolicy):
         if is_policy_network:
             self.action_dim, self.action_decoder = get_action_space(ac_space)
             with tf.variable_scope("policy"):
-                self.x, x, model = preprocess_observation_space(ob_space)
+                self.x, x, model, self.obs_shape = preprocess_observation_space(ob_space)
                 x = self._build_lstm_network(model, size)
 
                 m = Sequential()
@@ -136,7 +137,7 @@ class LSTMPolicy(LinearPolicy):
 
         else:
             with tf.variable_scope("value"):
-                self.x, x, model = preprocess_observation_space(ob_space)
+                self.x, x, model, self.obs_shape = preprocess_observation_space(ob_space)
                 x = self._build_lstm_network(model, size)
                 m = Sequential()
                 m.add(InputLayer(input_tensor=x))
@@ -180,15 +181,17 @@ class LSTMPolicy(LinearPolicy):
 
         return self.state_init
 
-    def act(self, obsevation, c, h):
+    def act(self, observation, c, h):
+        # obs_code = self.obs_encoder(observation)
         sess = tf.get_default_session()
         return sess.run({"logit": self.logits, "feature": self.features},
-                        {self.x: obsevation, self.state_in[0]: c, self.state_in[1]: h})
+                        {self.x: observation, self.state_in[0]: c, self.state_in[1]: h})
 
-    def value(self, obsevation, c, h):
+    def value(self, observation, c, h):
         sess = tf.get_default_session()
+        # obs_code = self.obs_encoder(observation)
         return sess.run({"value": self.values, "feature": self.features},
-                        {self.x: obsevation, self.state_in[0]: c, self.state_in[1]: h})
+                        {self.x: observation, self.state_in[0]: c, self.state_in[1]: h})
 
 
 def get_action_space(action_space):
@@ -242,16 +245,37 @@ def preprocess_observation_space(observation_space, n_hidden=32):
                 model.add(Dense(n_hidden))
                 model.add(Activation("relu"))
                 # x = relu(x, n_hidden, 'common{}'.format(i), normalized_columns_initializer())
-            return x_placeholder, x, model
+            return x_placeholder, x, model, lambda x: x
         else:
             print("Not implemented yet!")
     # Discrete
     else:
         obs_dim = observation_space.n
         print("observation dim :", obs_dim)
-        x_placeholder = tf.placeholder(tf.int32, [None], name="observation")
+        obs_ph = tf.placeholder(tf.int32, [None, None], name="observation")
+        # obs_ph = Input(shape=[None, None], dtype="int32", name="observation")
         # one hot action vector
-        x = tf.one_hot(x_placeholder, obs_dim, axis=1)
+        x = tf.one_hot(obs_ph, obs_dim)
+        # for l in range(2):
+        #     # x = relu(x, n_hidden, "common{}".format(l), normalized_columns_initializer())
+        #     x = Dense(n_hidden, activation="relu")(x)
+
+        from keras import backend as K
+        from keras.layers import Input, Lambda
+
+        x_in = Input(shape=[None], dtype="int32")
+        x = Lambda(K.one_hot, arguments={"num_classes": obs_dim}, output_shape=[None, obs_dim])(x_in)
+
+        model = Model(inputs=x_in, outputs=x)
+
+        model = Sequential(model.layers)
+        model.add(Dense(n_hidden, activation="relu", input_shape=[None, obs_dim]))
         for l in range(2):
-            x = relu(x, n_hidden, "common{}".format(l), normalized_columns_initializer())
-        return x_placeholder, x
+            model.add(Dense(n_hidden, activation="relu"))
+        #
+        # def obs_encoder(obs):
+        #     one_hots = np_utils.to_categorical(obs, obs_dim)
+        #     one_hot = np.reshape(one_hots, list(np.array(obs).shape) + [obs_dim])
+        #     return one_hot
+
+        return obs_ph, x, model, []

@@ -130,7 +130,7 @@ def main(_):
             total_step += 1
 
 
-def consistency(values, rewards, log_pies, T, d, gamma, tau, is_terminal, cut_end=True):
+def get_consistency(values, rewards, log_pies, T, d, gamma, tau, is_terminal, cut_end=True):
     """
     Calculate path consistency
     Here, we use end of samples
@@ -178,8 +178,8 @@ def consistency(values, rewards, log_pies, T, d, gamma, tau, is_terminal, cut_en
     return consistency, discounted_rewards, discount_m, value_m
 
 
-Batch = namedtuple("Batch", ["state", "action", "consistency", "terminal", "feature_p",
-                             "feature_v", "reward", "discounted_r", "discount_m", "value_m"])
+Batch = namedtuple("Batch", ["state", "action", "reward", "discounted_r",
+                             "discount_m", "value_m", "consistency"])
 
 
 
@@ -191,17 +191,16 @@ def process_rollout(rollout, d, gamma, tau, cut_end=True):
     :param gamma: discount ratio
     :return:
     """
-    batch_states = np.asarray(rollout.states)
-    batch_actions = np.asarray(rollout.actions)
-    rewards = np.asarray(rollout.rewards)
-    values = np.asarray(rollout.values)
+    state = np.asarray(rollout.states)
+    action = np.asarray(rollout.actions)
+    reward = np.asarray(rollout.rewards)
+    value = np.asarray(rollout.values)
     log_pies = np.asarray(rollout.log_pies)
-    batch_consistency, discounted_r, discount_m, value_m \
-        = consistency(values, rewards, log_pies, rollout.T, d, gamma, tau, rollout.terminal, cut_end)
-
-    feature_p, feature_v = rollout.features
-    return Batch(batch_states, batch_actions, batch_consistency, rollout.terminal,
-                 feature_p, feature_v, rewards, discounted_r, discount_m, value_m)
+    consistency, discounted_r, discount_m, value_m \
+        = get_consistency(value, reward, log_pies, rollout.T, d, gamma, tau,
+                          rollout.terminal, cut_end)
+    return Batch([state], [action], [reward], [discounted_r],
+                 [discount_m], [value_m], [consistency])
 
 
 class PartialRollout(object):
@@ -348,6 +347,7 @@ class PCL(object):
                                        is_policy_network=True)
             self.value_network = LinearPolicy(env.observation_space, env.action_space,
                                    is_policy_network=False)
+        self.obs_shape = self.policy_network.obs_shape
         self.action_ph = tf.placeholder(tf.float32, [None, None, self.policy_network.action_dim],
                                         name="action")
         self.discount_m_ph = tf.placeholder(tf.float32, [None, None, None], name="discount_m")
@@ -430,7 +430,8 @@ class PCL(object):
         # self.queue.put(rollout, timeout=1.0)
         # rollout = self.pull_batch_from_queue()
 
-        batch, fetched = self.train(rollout, report, sess)
+        batch = process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
+        fetched = self._train(batch, report, sess, batch_size=1)
 
         # if should_compute_summary:
         #     self.summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
@@ -446,62 +447,31 @@ class PCL(object):
             .format(np.sum(rollout.rewards), loss, step, entropy, erer))
 
         self.replay_buffer.add(rollout)
+
+        # Off-line batch training
         if self.replay_buffer.trainable:
             rollouts = self.replay_buffer.sample(batch_size)
-            self._batch_train(rollouts, report, sess)
+            batch = self._make_batches(rollouts)
+            fetched = self._train(batch, report, sess, self.batch_size)
 
         if self.summary_writer is not None:
             self.summary_writer.add_summary(fetched["summary_op"])
         self.local_steps += 1
 
-    def train(self, rollout, report, sess):
-        batch = process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
-
+    def _train(self, batch, report, sess, batch_size):
         feed_dict = {
-            self.value_network.x: [batch.state],
-            self.policy_network.x: [batch.state],
-            self.action_ph: [batch.action],
-            self.reward_ph: [batch.reward],
-            self.discounted_r_ph: [batch.discounted_r],
-            self.discount_m_ph: [batch.discount_m],
-            self.value_m_ph: [batch.value_m]
+            self.value_network.x: batch.state,
+            self.policy_network.x: batch.state,
+            self.action_ph: batch.action,
+            self.reward_ph: batch.reward,
+            self.discounted_r_ph: batch.discounted_r,
+            self.discount_m_ph: batch.discount_m,
+            self.value_m_ph: batch.value_m
         }
 
         if self.is_lstm:
-            feed_dict[self.policy_network.state_in[0]] = batch.feature_p[0]
-            feed_dict[self.policy_network.state_in[1]] = batch.feature_p[1]
-            feed_dict[self.value_network.state_in[0]] = batch.feature_v[0]
-            feed_dict[self.value_network.state_in[1]] = batch.feature_v[1]
-
-        fetches = {"train_op": self.train_op}
-        if report or self.summary_writer is not None:
-            fetches["report"] = self.report
-            fetches["summary_op"] = self.summary_op
-
-        fetched = sess.run(fetches, feed_dict=feed_dict)
-        return batch, fetched
-
-    def _batch_train(self, rollouts, report, sess):
-        batch_state, batch_action, batch_reward, batch_discounted_r, batch_discount_m, batch_value_m =\
-            self._make_batches(rollouts)
-
-        feed_dict = {
-            self.value_network.x: batch_state,
-            self.policy_network.x: batch_state,
-            self.action_ph: batch_action,
-            self.reward_ph: batch_reward,
-            self.discounted_r_ph: batch_discounted_r,
-            self.discount_m_ph: batch_discount_m,
-            self.value_m_ph: batch_value_m
-        }
-
-        if self.is_lstm:
-            # feed_dict[self.policy_network.state_in[0]] = batch.feature_p[0]
-            # feed_dict[self.policy_network.state_in[1]] = batch.feature_p[1]
-            # feed_dict[self.value_network.state_in[0]] = batch.feature_v[0]
-            # feed_dict[self.value_network.state_in[1]] = batch.feature_v[1]
-            feature_p = self.policy_network.get_initial_features(self.batch_size)
-            feature_v = self.value_network.get_initial_features(self.batch_size)
+            feature_p = self.policy_network.get_initial_features(batch_size)
+            feature_v = self.value_network.get_initial_features(batch_size)
             feed_dict[self.policy_network.state_in[0]] = feature_p[0]
             feed_dict[self.policy_network.state_in[1]] = feature_p[1]
             feed_dict[self.value_network.state_in[0]] = feature_v[0]
@@ -513,35 +483,37 @@ class PCL(object):
             fetches["summary_op"] = self.summary_op
 
         fetched = sess.run(fetches, feed_dict=feed_dict)
-        # return batch, fetched
+        return fetched
 
     def _make_batches(self, rollouts):
         batch_size = len(rollouts)
         max_t = max(r.T for r in rollouts)
-        obs_shape = list(rollouts[0].states[0].shape)
+        # obs_shape = list(rollouts[0].states[0].shape)
+        obs_shape = self.obs_shape
 
         batch_list = [process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
                       for rollout in rollouts]
 
         # Initialization
-        batch_state = np.zeros([batch_size, max_t+1] + obs_shape)
-        batch_action = np.zeros((batch_size, max_t, self.policy_network.action_dim))
-        batch_reward = np.zeros((batch_size, max_t))
-        batch_discounted_r = np.zeros((batch_size, max_t))
-        batch_discount_m = np.zeros((batch_size, max_t, max_t))
-        batch_value_m = np.zeros((batch_size, max_t, max_t+1))
+        state = np.zeros([batch_size, max_t+1] + obs_shape)
+        action = np.zeros((batch_size, max_t, self.policy_network.action_dim))
+        reward = np.zeros((batch_size, max_t))
+        discounted_r = np.zeros((batch_size, max_t))
+        discount_m = np.zeros((batch_size, max_t, max_t))
+        value_m = np.zeros((batch_size, max_t, max_t+1))
 
-        batch_state = self._padd_1d_batches(batch_state, [b.state for b in batch_list])
-        batch_action = self._padd_1d_batches(batch_action, [b.action for b in batch_list])
-        batch_reward = self._padd_1d_batches(batch_reward, [b.reward[:, None] for b in batch_list])
-        batch_discounted_r = self._padd_1d_batches(batch_discounted_r,
-                                                   [b.discounted_r[:, None] for b in batch_list])
-        batch_discount_m = self._padd_2d_batches(batch_discount_m,
-                                                 [b.discount_m for b in batch_list])
-        batch_value_m = self._padd_2d_batches(batch_value_m,
-                                                 [b.value_m for b in batch_list])
-        return batch_state, batch_action, batch_reward, batch_discounted_r,\
-               batch_discount_m, batch_value_m
+        state = self._padd_1d_batches(state, [b.state[0] for b in batch_list])
+        action = self._padd_1d_batches(action, [b.action[0] for b in batch_list])
+        reward = self._padd_1d_batches(reward, [b.reward[0][:, None] for b in batch_list])
+        discounted_r = self._padd_1d_batches(discounted_r,
+                                             [b.discounted_r[0][:, None] for b in batch_list])
+        discount_m = self._padd_2d_batches(discount_m,
+                                           [b.discount_m[0] for b in batch_list])
+        value_m = self._padd_2d_batches(value_m,
+                                        [b.value_m[0] for b in batch_list])
+
+        batch = Batch(state, action, reward, discounted_r, discount_m, value_m, [])
+        return batch
 
     def _padd_1d_batches(self, zeros, batch_list):
         """
