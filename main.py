@@ -276,7 +276,6 @@ def env_runner(sess, env, policy_net, value_net, max_step_per_episode,
     last_feature_v = value_net.get_initial_features(1)
     initial_value = value_net.value([[last_state]], *last_feature_v)["value"]
     step = 0
-    episode_reward = 0
     terminal_end = False
     rollout = PartialRollout(last_state, initial_value, last_feature_p, last_feature_v)
     feature_p = [None, None]
@@ -304,8 +303,6 @@ def env_runner(sess, env, policy_net, value_net, max_step_per_episode,
         terminal = terminal if step < max_step_per_episode else False
         # Collect the experience
         rollout.add(state_to_input, log_pi, action, reward, value, terminal)
-
-        episode_reward += reward
 
         # For next step
         last_state = state_to_input
