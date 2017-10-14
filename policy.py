@@ -5,7 +5,8 @@ import tensorflow.contrib.rnn as rnn
 import distutils
 from keras.models import Sequential, Model
 from keras.layers import Dense, Activation, InputLayer, Input
-from keras.utils import np_utils
+from keras import backend as K
+from keras.layers import Input, Lambda
 
 use_tf100_api = distutils.version.LooseVersion(tf.VERSION) >= distutils.version.LooseVersion('1.0.0')
 
@@ -64,12 +65,12 @@ class LinearPolicy(object):
             self.action_dim, self.action_decoder = get_action_space(ac_space)
             with tf.variable_scope("policy"):
                 # First dimension is the number of steps in an episode
-                self.x, x, model, _ = preprocess_observation_space(ob_space)
-                self._build_policy_network(x, model)
+                model, self.obs_shape = preprocess_observation_space(ob_space)
+                self._build_policy_network(model)
         else:
             with tf.variable_scope("value"):
-                self.x, x, model, _ = preprocess_observation_space(ob_space)
-                self._build_value_network(x, model)
+                model, self.obs_shape = preprocess_observation_space(ob_space)
+                self._build_value_network(model)
         self.x = model.input
         self.variable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
 
@@ -84,7 +85,7 @@ class LinearPolicy(object):
         sess = tf.get_default_session()
         return sess.run({"value": self.values}, {self.x: obsevation})
 
-    def _build_value_network(self, x, model):
+    def _build_value_network(self, model):
         model.add(Dense(self.n_hidden))
         model.add(Activation("relu"))
         # hidden_v = relu(x, 50, "hidden0", normalized_columns_initializer())
@@ -95,57 +96,36 @@ class LinearPolicy(object):
         model.add(Dense(1, activation="linear"))
         self.values = model.output
 
-    def _build_policy_network(self, x, model):
+    def _build_policy_network(self, model):
         # hidden_pi = relu(x, 50, "hidden0", normalized_columns_initializer())
         # i = 0
         model.add(Dense(self.n_hidden, activation="relu"))
         for i in range(0):
             model.add(Dense(self.n_hidden, activation="relu"))
-        model.add(Dense(self.action_dim, activation="relu"))
-        model.add(Activation("softmax"))
+        model.add(Dense(self.action_dim, activation="softmax"))
         self.logits = model.output
-        #     hidden_pi = relu(hidden_pi, 50, "hidden{}".format(i+1), normalized_columns_initializer())
-        # hidden_pi = relu(hidden_pi, self.action_dim, "hidden{}".format(i+1), normalized_columns_initializer())
-        # self.logits = tf.nn.softmax(hidden_pi, name="softmax")
 
 
 class LSTMPolicy(LinearPolicy):
     def __init__(self, ob_space, ac_space, n_hidden=50, size=128, is_policy_network=True):
         self.n_hidden = n_hidden
-        # with tf.variable_scope("common"):
-        #     self.action_dim, self.action_decoder = get_action_space(ac_space)
-        #     self.x, x = preprocess_observation_space(ob_space)
-        #     # introduce a "fake" batch dimension of 1 after flatten so that
-        #     #  we can do LSTM over time dim
-        #     # x is converted in shape of [1, time step, ob_space]
-
         if is_policy_network:
             self.action_dim, self.action_decoder = get_action_space(ac_space)
             with tf.variable_scope("policy"):
-                self.x, x, model, self.obs_shape = preprocess_observation_space(ob_space)
+                model, self.obs_shape = preprocess_observation_space(ob_space)
                 x = self._build_lstm_network(model, size)
 
                 m = Sequential()
                 m.add(InputLayer(input_tensor=x))
-                self._build_policy_network(x, m)
-                # hidden_theta = relu(x, 50, "dense_0")
-                # i = 0
-                # for i in range(0):
-                #     hidden_theta = relu(hidden_theta, 50, "hidden{}".format(i+1))
-                # last = relu(hidden_theta, self.action_dim, "dense_1")
-                # self.logits = tf.nn.softmax(last, name="softmax")
-
+                self._build_policy_network(m)
         else:
             with tf.variable_scope("value"):
-                self.x, x, model, self.obs_shape = preprocess_observation_space(ob_space)
+                model, self.obs_shape = preprocess_observation_space(ob_space)
                 x = self._build_lstm_network(model, size)
+
                 m = Sequential()
                 m.add(InputLayer(input_tensor=x))
-                self._build_value_network(x, m)
-                # hidden_phi = relu(x, 50, "dense_0")
-                # for i in range(1):
-                #     hidden_phi = relu(hidden_phi, 50, "hidden{}".format(i+1))
-                # self.values = tf.reshape(linear(hidden_phi, 1, "dense_1"), [-1])
+                self._build_value_network(m)
         self.x = model.input
         self.variable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
 
@@ -157,7 +137,7 @@ class LSTMPolicy(LinearPolicy):
         else:
             cell = rnn.rnn_cell.BasicLSTMCell(size, state_is_tuple=True)
         self.state_size = cell.state_size
-
+        # The first dimension is batch size
         c_in = tf.placeholder(tf.float32, [None, cell.state_size.c])
         h_in = tf.placeholder(tf.float32, [None, cell.state_size.h])
         self.state_in = [c_in, h_in]
@@ -169,8 +149,6 @@ class LSTMPolicy(LinearPolicy):
         lstm_outputs, self.features = tf.nn.dynamic_rnn(
             cell, x, initial_state=state_in,
             time_major=False)
-        # lstm_c, lstm_h = lstm_state
-        # x = tf.squeeze(lstm_outputs, axis=0)
         return x
 
     def get_initial_features(self, batch_size):
@@ -235,47 +213,29 @@ def preprocess_observation_space(observation_space, n_hidden=32):
             return x_placeholder, x
         # e.g. CartPole
         elif len(observation_space.shape) is 1:
-            print("observation dim :", observation_space.shape[0])
+            obs_dim = list(observation_space.shape[:1])
+            print("observation dim :", obs_dim)
             # [batch, seq_length, obs_dim]
-            x = x_placeholder = tf.placeholder(tf.float32, [None, None, observation_space.shape[0]])
             model = Sequential()
-            model.add(Dense(n_hidden, input_shape=[None, observation_space.shape[0]]))
-            model.add((Activation("relu")))
+            model.add(Dense(n_hidden, input_shape=[None, observation_space.shape[0]], activation="relu"))
             for i in range(2):
-                model.add(Dense(n_hidden))
-                model.add(Activation("relu"))
-                # x = relu(x, n_hidden, 'common{}'.format(i), normalized_columns_initializer())
-            return x_placeholder, x, model, lambda x: x
+                model.add(Dense(n_hidden, activation="relu"))
+            return model, obs_dim
         else:
             print("Not implemented yet!")
     # Discrete
     else:
         obs_dim = observation_space.n
         print("observation dim :", obs_dim)
-        obs_ph = tf.placeholder(tf.int32, [None, None], name="observation")
-        # obs_ph = Input(shape=[None, None], dtype="int32", name="observation")
-        # one hot action vector
-        x = tf.one_hot(obs_ph, obs_dim)
-        # for l in range(2):
-        #     # x = relu(x, n_hidden, "common{}".format(l), normalized_columns_initializer())
-        #     x = Dense(n_hidden, activation="relu")(x)
-
-        from keras import backend as K
-        from keras.layers import Input, Lambda
 
         x_in = Input(shape=[None], dtype="int32")
+        # one hot action vector
         x = Lambda(K.one_hot, arguments={"num_classes": obs_dim}, output_shape=[None, obs_dim])(x_in)
 
         model = Model(inputs=x_in, outputs=x)
-
         model = Sequential(model.layers)
         model.add(Dense(n_hidden, activation="relu", input_shape=[None, obs_dim]))
         for l in range(2):
             model.add(Dense(n_hidden, activation="relu"))
-        #
-        # def obs_encoder(obs):
-        #     one_hots = np_utils.to_categorical(obs, obs_dim)
-        #     one_hot = np.reshape(one_hots, list(np.array(obs).shape) + [obs_dim])
-        #     return one_hot
 
-        return obs_ph, x, model, []
+        return model, []

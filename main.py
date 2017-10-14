@@ -488,14 +488,12 @@ class PCL(object):
     def _make_batches(self, rollouts):
         batch_size = len(rollouts)
         max_t = max(r.T for r in rollouts)
-        # obs_shape = list(rollouts[0].states[0].shape)
-        obs_shape = self.obs_shape
 
         batch_list = [process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
                       for rollout in rollouts]
 
         # Initialization
-        state = np.zeros([batch_size, max_t+1] + obs_shape)
+        state = np.zeros([batch_size, max_t+1] + self.obs_shape)
         action = np.zeros((batch_size, max_t, self.policy_network.action_dim))
         reward = np.zeros((batch_size, max_t))
         discounted_r = np.zeros((batch_size, max_t))
