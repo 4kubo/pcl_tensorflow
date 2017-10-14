@@ -428,26 +428,25 @@ class PCL(object):
 
         # self.queue.put(rollout, timeout=1.0)
         # rollout = self.pull_batch_from_queue()
-        if rollout.terminal:
-            batch = process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
-            fetched = self._train(batch, report, sess, batch_size=1)
+        batch = process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
+        fetched = self._train(batch, report, sess, batch_size=1, train=rollout.terminal)
 
-            self.replay_buffer.add(rollout)
-            # if should_compute_summary:
-            #     self.summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
-            #     self.summary_writer.flush()
-            if visualise or report:
-                d = self.d if self.d < rollout.T else rollout.T
-                loss = fetched["report"]["loss"]
-                loss = np.mean(loss) / d
-                entropy = fetched["report"]["entropy"]
-                erer = fetched["report"]["err"]
-                print(
-                "@{2: >5}; reward : {0: >8.3}, entropy regularized reward : {4: >8.3}, loss : {1: >8.3}, entropy : {3: >8.3}"
-                .format(np.sum(rollout.rewards), loss, step, entropy, erer))
+        self.replay_buffer.add(rollout)
+        # if should_compute_summary:
+        #     self.summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
+        #     self.summary_writer.flush()
+        if visualise or report:
+            d = self.d if self.d < rollout.T else rollout.T
+            loss = fetched["report"]["loss"]
+            loss = np.mean(loss) / d
+            entropy = fetched["report"]["entropy"]
+            erer = fetched["report"]["err"]
+            print(
+            "@{2: >5}; reward : {0: >8.3}, entropy regularized reward : {4: >8.3}, loss : {1: >8.3}, entropy : {3: >8.3}"
+            .format(np.sum(rollout.rewards), loss, step, entropy, erer))
 
-            if self.summary_writer is not None:
-                self.summary_writer.add_summary(fetched["summary_op"])
+        if self.summary_writer is not None:
+            self.summary_writer.add_summary(fetched["summary_op"])
 
         # Off-line batch training
         if self.replay_buffer.trainable:
@@ -457,7 +456,7 @@ class PCL(object):
 
         self.local_steps += 1
 
-    def _train(self, batch, report, sess, batch_size):
+    def _train(self, batch, report, sess, batch_size, train=True):
         feed_dict = {
             self.value_network.x: batch.state,
             self.policy_network.x: batch.state,
@@ -476,7 +475,10 @@ class PCL(object):
             feed_dict[self.value_network.state_in[0]] = feature_v[0]
             feed_dict[self.value_network.state_in[1]] = feature_v[1]
 
-        fetches = {"train_op": self.train_op}
+        fetches = {}
+        # If an episode reaches to the end
+        if train:
+            fetches["train_op"] = self.train_op
         if report or self.summary_writer is not None:
             fetches["report"] = self.report
             fetches["summary_op"] = self.summary_op
