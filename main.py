@@ -295,11 +295,10 @@ def env_runner(sess, env, policy_net, value_net, max_step_per_episode,
         if is_lstm:
             feature_v = fetches["feature"]
 
-        if visualize:
-            env.render()
-
-        # collect the experience
         state_to_input = state if isinstance(state, int) else state.copy()
+        # Discard an failed episode
+        terminal = terminal if step < max_step_per_episode else False
+        # Collect the experience
         rollout.add(state_to_input, log_pi, action, reward, value, terminal)
 
         episode_reward += reward
@@ -309,15 +308,12 @@ def env_runner(sess, env, policy_net, value_net, max_step_per_episode,
         last_feature_p = feature_p
         last_feature_v = feature_v
 
+        if visualize:
+            env.render()
+
         if terminal or step >= max_step_per_episode:
-            terminal_end = True
-            if step >= max_step_per_episode or not env.metadata.get('semantics.autoreset'):
-                last_state = env.reset()
-            last_feature_p = policy_net.get_initial_features(1)
-            last_feature_v = value_net.get_initial_features(1)
             break
 
-    # once we have enough experience, yield it, and have the ThreadRunner place it on a queue
     return rollout
 
 
@@ -373,7 +369,6 @@ class PCL(object):
         discounted_values = tf.einsum("ijk,ik->ij", self.value_m_ph, self.values)
         # Path Consistency
         consistency = discounted_values + self.discounted_r_ph - self.tau*g
-        self.c = consistency
 
         # Calculation of entropy for report
         entropy = -log_prob_tf * self.policy_network.logits[:, :-1, :]
@@ -429,24 +424,26 @@ class PCL(object):
 
         # self.queue.put(rollout, timeout=1.0)
         # rollout = self.pull_batch_from_queue()
+        if rollout.terminal:
+            batch = process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
+            fetched = self._train(batch, report, sess, batch_size=1)
 
-        batch = process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
-        fetched = self._train(batch, report, sess, batch_size=1)
+            self.replay_buffer.add(rollout)
+            # if should_compute_summary:
+            #     self.summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
+            #     self.summary_writer.flush()
+            if visualise or report:
+                d = self.d if self.d < rollout.T else rollout.T
+                loss = fetched["report"]["loss"]
+                loss = np.mean(loss) / d
+                entropy = fetched["report"]["entropy"]
+                erer = fetched["report"]["err"]
+                print(
+                "@{2: >5}; reward : {0: >8.3}, entropy regularized reward : {4: >8.3}, loss : {1: >8.3}, entropy : {3: >8.3}"
+                .format(np.sum(rollout.rewards), loss, step, entropy, erer))
 
-        # if should_compute_summary:
-        #     self.summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
-        #     self.summary_writer.flush()
-        if visualise or report:
-            d = self.d if self.d < rollout.T else rollout.T
-            loss = fetched["report"]["loss"]
-            loss = np.mean(loss) / d
-            entropy = fetched["report"]["entropy"]
-            erer = fetched["report"]["err"]
-            print(
-            "@{2: >5}; reward : {0: >8.3}, entropy regularized reward : {4: >8.3}, loss : {1: >8.3}, entropy : {3: >8.3}"
-            .format(np.sum(rollout.rewards), loss, step, entropy, erer))
-
-        self.replay_buffer.add(rollout)
+            if self.summary_writer is not None:
+                self.summary_writer.add_summary(fetched["summary_op"])
 
         # Off-line batch training
         if self.replay_buffer.trainable:
@@ -454,8 +451,6 @@ class PCL(object):
             batch = self._make_batches(rollouts)
             fetched = self._train(batch, report, sess, self.batch_size)
 
-        if self.summary_writer is not None:
-            self.summary_writer.add_summary(fetched["summary_op"])
         self.local_steps += 1
 
     def _train(self, batch, report, sess, batch_size):
