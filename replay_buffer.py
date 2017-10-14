@@ -2,10 +2,10 @@ import numpy as np
 
 
 class ReplayBuffer(object):
-    def __init__(self, max_length=10000, batch_size=100, alpha=0.5):
+    def __init__(self, max_length=10000, alpha=0.5, start_at=1000):
         self.max_length = max_length
-        self.batch_size = batch_size
         self.alpha = alpha
+        self.start_at = start_at
         self.buffer = []
         self.priority = []
 
@@ -27,7 +27,7 @@ class ReplayBuffer(object):
 
     @property
     def trainable(self):
-        if self.batch_size <= len(self.buffer):
+        if self.start_at <= len(self.buffer):
             return True
         else:
             return False

@@ -29,6 +29,10 @@ def arg_parse():
     parser.add_argument("-b", "--batch_size",
                         type=int,
                         default=100)
+    parser.add_argument("--start_at",
+                        type=int,
+                        default=1000,
+                        help="From which offline training starts")
     parser.add_argument("-r", "--actor_learning_rate",
                         type=float,
                         default=7e-4)
@@ -91,7 +95,7 @@ def main(_):
                 actor_learning_rate=args.actor_learning_rate, alpha=args.alpha,
                 critic_weight=args.critic_weight, batch_size=args.batch_size,
                 is_lstm=args.is_lstm, visualise=args.visualise, tau=args.tau,
-                max_step_per_episode=args.max_step_per_episode,
+                max_step_per_episode=args.max_step_per_episode, start_at=args.start_at,
                 cut_end=args.cut_end, clip_min=args.clip_min)
 
     init_all_op = tf.global_variables_initializer()
@@ -319,7 +323,7 @@ def env_runner(sess, env, policy_net, value_net, max_step_per_episode,
 
 class PCL(object):
     def __init__(self, env, d=10, gamma=1.0, tau=0.01, actor_learning_rate=1e-4,
-                 critic_weight=0.1, alpha=0.5, batch_size=100, is_lstm=False, visualise=False,
+                 critic_weight=0.1, alpha=0.5, batch_size=100, start_at=1000, is_lstm=False, visualise=False,
                  max_step_per_episode=1000, cut_end=True, clip_min=1e-10):
         self.env = env
         self.d = d
@@ -353,7 +357,7 @@ class PCL(object):
         self.values = self.value_network.values[:, :, 0]
         self.queue = queue.Queue(5)
         self.local_steps = 0
-        self.replay_buffer = ReplayBuffer(alpha=alpha)
+        self.replay_buffer = ReplayBuffer(alpha=alpha, start_at=start_at)
 
         # The length of one episode
         T = tf.shape(self.action_ph)[1]
@@ -411,7 +415,7 @@ class PCL(object):
                 break
         return rollout
 
-    def process(self, sess, step, visualise, report, is_lstm=False, batch_size=100):
+    def process(self, sess, step, visualise, report, is_lstm=False):
         """
         process grabs a rollout that's been produced by the thread runner,
         and updates the parameters.  The update is then sent to the parameter
@@ -447,7 +451,7 @@ class PCL(object):
 
         # Off-line batch training
         if self.replay_buffer.trainable:
-            rollouts = self.replay_buffer.sample(batch_size)
+            rollouts = self.replay_buffer.sample(self.batch_size)
             batch = self._make_batches(rollouts)
             fetched = self._train(batch, report, sess, self.batch_size)
 
