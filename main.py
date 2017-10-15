@@ -422,32 +422,38 @@ class PCL(object):
 
 
         # self.queue.put(rollout, timeout=1.0)
-        # rollout = self.pull_batch_from_queue()
-        batch = process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
-        fetched = self._process(batch, report, sess, batch_size=1, train=rollout.terminal)
-
         self.replay_buffer.add(rollout)
-        # if should_compute_summary:
-        #     self.summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
-        #     self.summary_writer.flush()
-        if visualise or report:
-            d = self.d if self.d < rollout.T else rollout.T
-            loss = fetched["report"]["loss"]
-            loss = np.mean(loss) / d
-            entropy = fetched["report"]["entropy"]
-            erer = fetched["report"]["err"]
-            print(
-            "@{2: >5}; reward : {0: >8.3}, entropy regularized reward : {4: >8.3}, loss : {1: >8.3}, entropy : {3: >8.3}"
-            .format(np.sum(rollout.rewards), loss, step, entropy, erer))
 
-        if self.summary_writer is not None:
-            self.summary_writer.add_summary(fetched["summary_op"])
-
-        # Off-line batch training
         if self.replay_buffer.trainable:
+            # On policy training
+            # rollout = self.pull_batch_from_queue()
+            batch = process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
+            fetched = self._process(batch, report, sess, batch_size=1, train=rollout.terminal)
+
+            # if should_compute_summary:
+            #     self.summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
+            #     self.summary_writer.flush()
+            if visualise or report:
+                d = self.d if self.d < rollout.T else rollout.T
+                loss = fetched["report"]["loss"]
+                loss = np.mean(loss) / d
+                entropy = fetched["report"]["entropy"]
+                erer = fetched["report"]["err"]
+                print(
+                    "@{2: >5}; reward : {0: >8.3}, entropy regularized reward : {4: >8.3}, loss : {1: >8.3}, entropy : {3: >8.3}"
+                        .format(np.sum(rollout.rewards), loss, step, entropy, erer))
+
+            if self.summary_writer is not None:
+                self.summary_writer.add_summary(fetched["summary_op"])
+
+            # Off-policy training
             rollouts = self.replay_buffer.sample(self.batch_size)
             batches = self._make_batches(rollouts)
             fetched = self._process(batches, report, sess, self.batch_size)
+        else:
+            if visualise or report:
+                print("@{1: >5}; reward : {0: >8.3}".format(np.sum(rollout.rewards), step))
+
 
         self.local_steps += 1
 
