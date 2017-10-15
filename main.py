@@ -1,5 +1,4 @@
 import gym
-import gym_maze
 from collections import namedtuple
 import numpy as np
 import tensorflow as tf
@@ -366,7 +365,6 @@ class PCL(object):
         # Discounted action distribution
         g = tf.einsum("ijk,ik->ij", self.discount_m_ph, log_pi)
         # Discounted values
-        # discounted_values = tf.reshape(tf.matmul(self.value_m_ph, self.values[:, None]), [-1])
         discounted_values = tf.einsum("ijk,ik->ij", self.value_m_ph, self.values)
         # Path Consistency
         consistency = discounted_values + self.discounted_r_ph - self.tau*g
@@ -426,7 +424,7 @@ class PCL(object):
         # self.queue.put(rollout, timeout=1.0)
         # rollout = self.pull_batch_from_queue()
         batch = process_rollout(rollout, self.d, self.gamma, self.tau, self.cut_end)
-        fetched = self._train(batch, report, sess, batch_size=1, train=rollout.terminal)
+        fetched = self._process(batch, report, sess, batch_size=1, train=rollout.terminal)
 
         self.replay_buffer.add(rollout)
         # if should_compute_summary:
@@ -448,12 +446,21 @@ class PCL(object):
         # Off-line batch training
         if self.replay_buffer.trainable:
             rollouts = self.replay_buffer.sample(self.batch_size)
-            batch = self._make_batches(rollouts)
-            fetched = self._train(batch, report, sess, self.batch_size)
+            batches = self._make_batches(rollouts)
+            fetched = self._process(batches, report, sess, self.batch_size)
 
         self.local_steps += 1
 
-    def _train(self, batch, report, sess, batch_size, train=True):
+    def _process(self, batch, report, sess, batch_size, train=True):
+        """
+        Process batch data. If `train` is `True`, fit the agent on the batch data
+        :param batch:
+        :param report:
+        :param sess:
+        :param batch_size:
+        :param train(bool):
+        :return:
+        """
         feed_dict = {
             self.value_network.x: batch.state,
             self.policy_network.x: batch.state,
@@ -520,7 +527,6 @@ class PCL(object):
         """
         n = np.prod(zeros.shape[2:]).astype(int)
         t_max = zeros.shape[1] # The maximum length of the episodes in `batch_list`
-        # exec("grids=np.meshgrid({})".format(",".join("range({0})".format(i) for i in dims)))
         indexes = np.concatenate([n*t_max*i+np.arange(n*t.shape[0])
                                   for i, t in enumerate(batch_list)])
 
