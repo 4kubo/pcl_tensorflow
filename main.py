@@ -63,7 +63,7 @@ def arg_parse():
     parser.add_argument("--target_task",
                         type=str,
                         default="CartPole-v0")
-    parser.add_argument("--is_lstm",
+    parser.add_argument("--with_lstm",
                         action="store_true")
     parser.add_argument("--save_model",
                         type=str,
@@ -93,7 +93,7 @@ def main(_):
     model = PCL(env, d=args.d, gamma=args.gamma,
                 actor_learning_rate=args.actor_learning_rate, alpha=args.alpha,
                 critic_weight=args.critic_weight, batch_size=args.batch_size,
-                is_lstm=args.is_lstm, visualise=args.visualise, tau=args.tau,
+                with_lstm=args.with_lstm, visualise=args.visualise, tau=args.tau,
                 max_step_per_episode=args.max_step_per_episode, start_at=args.start_at,
                 cut_end=args.cut_end, clip_min=args.clip_min)
 
@@ -129,7 +129,7 @@ def main(_):
             else:
                 report = False
             model.process(sess, total_step, visualise, report,
-                          is_lstm=args.is_lstm)
+                          with_lstm=args.with_lstm)
             total_step += 1
 
 
@@ -261,7 +261,7 @@ def sample_log_pi(action_logit, action_dim, clip_min=1e-10):
 
 
 def env_runner(sess, env, policy_net, value_net, max_step_per_episode,
-               summary_writer=None, visualize=False, is_lstm=False):
+               summary_writer=None, visualize=False, with_lstm=False):
     """
     The logic of the thread runner.  In brief, it constantly keeps on running
     the policy, and as long as the rollout exceeds a certain length, the thread
@@ -284,7 +284,7 @@ def env_runner(sess, env, policy_net, value_net, max_step_per_episode,
 
         fetches = policy_net.act([[last_state]], *last_feature_p)
         action_logit = fetches["logit"]
-        if is_lstm:
+        if with_lstm:
             feature_p = fetches["feature"]
         log_pi, action = sample_log_pi(action_logit, policy_net.action_dim)
         # argmax to convert from one-hot
@@ -293,7 +293,7 @@ def env_runner(sess, env, policy_net, value_net, max_step_per_episode,
 
         fetches = value_net.value([[state]], *last_feature_v)
         value = fetches["value"]
-        if is_lstm:
+        if with_lstm:
             feature_v = fetches["feature"]
 
         state_to_input = state if isinstance(state, int) else state.copy()
@@ -318,7 +318,7 @@ def env_runner(sess, env, policy_net, value_net, max_step_per_episode,
 
 class PCL(object):
     def __init__(self, env, d=10, gamma=1.0, tau=0.01, actor_learning_rate=1e-4,
-                 critic_weight=0.1, alpha=0.5, batch_size=100, start_at=1000, is_lstm=False, visualise=False,
+                 critic_weight=0.1, alpha=0.5, batch_size=100, start_at=1000, with_lstm=False, visualise=False,
                  max_step_per_episode=1000, cut_end=True, clip_min=1e-10):
         self.env = env
         self.d = d
@@ -326,13 +326,13 @@ class PCL(object):
         self.tau = tau
         self.actor_learning_rate = actor_learning_rate
         self.batch_size = batch_size
-        self.is_lstm = is_lstm
+        self.with_lstm = with_lstm
         self.max_step_per_episode = max_step_per_episode
         self.visualise = visualise
         self.cut_end = cut_end
         self.clip_min = clip_min
         self.obs_space = env.observation_space
-        if self.is_lstm:
+        if self.with_lstm:
             self.policy_network = LSTMPolicy(env.observation_space, env.action_space,
                                      is_policy_network=True)
             self.value_network =  LSTMPolicy(env.observation_space, env.action_space,
@@ -409,7 +409,7 @@ class PCL(object):
                 break
         return rollout
 
-    def process(self, sess, step, visualise, report, is_lstm=False):
+    def process(self, sess, step, visualise, report, with_lstm=False):
         """
         process grabs a rollout that's been produced by the thread runner,
         and updates the parameters.  The update is then sent to the parameter
@@ -417,7 +417,7 @@ class PCL(object):
         """
         rollout = env_runner(sess, self.env, self.policy_network, self.value_network,
                              self.max_step_per_episode, self.summary_writer,
-                             visualise, is_lstm=is_lstm)
+                             visualise, with_lstm=with_lstm)
 
 
         # self.queue.put(rollout, timeout=1.0)
@@ -476,7 +476,7 @@ class PCL(object):
             self.value_m_ph: batch.value_m
         }
 
-        if self.is_lstm:
+        if self.with_lstm:
             feature_p = self.policy_network.get_initial_features(batch_size)
             feature_v = self.value_network.get_initial_features(batch_size)
             feed_dict[self.policy_network.state_in[0]] = feature_p[0]

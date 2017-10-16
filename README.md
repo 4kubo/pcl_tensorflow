@@ -18,4 +18,4 @@ If you want to render, please add "-v" argument
 
 Verified work on the task "Copy-v0", but not as much as their report.
 
-`python main --target_task Copy-v0 --tau 0.005 --gamma 0.9 --d  10 -b 400 --step_to_report 100 -r 5e-5 --start_at 2000  -c 0.5 --is_lstm`
+`python main --target_task Copy-v0 --tau 0.005 --gamma 0.9 --d  10 -b 400 --step_to_report 100 -r 5e-5 --start_at 2000  -c 0.5 --with_lstm`
