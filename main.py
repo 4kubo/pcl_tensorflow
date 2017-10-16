@@ -162,7 +162,6 @@ def get_consistency(values, rewards, log_pies, T, d, gamma, tau, is_terminal, cu
 
     # Terminal condition
     if is_terminal:
-        discount_m[T - d:, :] = 0
         value_m[T - d:, -1] = 0
     else:
         value_m[T - d:, -1] = [gamma ** (d - i) for i in range(d)]
