@@ -3,7 +3,7 @@
 This is Tensorflow (partially using keras) implementation of PCL as described in [Bridging the Gap Between Value and Policy Based Reinforcement Learning](https://arxiv.org/abs/1702.08892).
 
 ## Requirement
-Verified on the following envrironment,
+Verified on the following environment,
 - python 2.7
 - tensorflow 1.3.0
 - gym 0.9.2

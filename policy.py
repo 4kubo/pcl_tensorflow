@@ -4,7 +4,8 @@ import tensorflow as tf
 import tensorflow.contrib.rnn as rnn
 import distutils
 from keras.models import Sequential, Model
-from keras.layers import Dense, Activation, InputLayer, Input
+from keras.layers import Dense, Activation, InputLayer, Convolution2D, Flatten, Reshape
+from keras.layers.convolutional import Conv2D, Conv3D
 from keras import backend as K
 from keras.layers import Input, Lambda
 
@@ -149,7 +150,7 @@ class LSTMPolicy(LinearPolicy):
         lstm_outputs, self.features = tf.nn.dynamic_rnn(
             cell, x, initial_state=state_in,
             time_major=False)
-        return x
+        return lstm_outputs
 
     def get_initial_features(self, batch_size):
         # batch size is always 1
@@ -200,17 +201,51 @@ def get_action_space(action_space):
         return action_space_dim, action_decoder
 
 def preprocess_observation_space(observation_space, n_hidden=32):
-    # If observation is an image, add CNN
     if isinstance(observation_space, gym.spaces.box.Box):
+        # If observation is an image, add CNN
         if len(observation_space.shape) is 3 and\
             observation_space.shape[-1] is 3:
-            x_placeholder = tf.placeholder(tf.float32, [None] + list(observation_space.shape),
-                                           name="observation")
-            x = x_placeholder
-            for i in range(4):
-                x = tf.nn.elu(conv2d(x, 32, "l{}".format(i + 1), [3, 3], [2, 2]))
-            x = flatten(x)
-            return x_placeholder, x
+            # conv 2d
+            # obs_dim = observation_space.shape
+            # x_in = Input(shape=[None] + list(obs_dim))
+            # x = Lambda(K.reshape, arguments={"shape": [-1] + list(obs_dim)})(x_in)
+            # model = Model(inputs=x_in, outputs=x)
+            #
+            # model = Sequential(model.layers)
+            # b = tf.shape(model.input)[1]
+            # model.add(Conv2D(32, (3, 3), strides=(3, 3), activation="relu", input_shape=obs_dim))
+            # model.add(Conv2D(32, (3, 3), strides=(3, 3), activation="relu"))
+            #
+            # m = np.prod(model.output.shape.as_list()[1:])
+            # model.add(Lambda(K.reshape, arguments={"shape":[-1, b, m]}))
+
+
+            # conv 3D
+            obs_dim = observation_space.shape
+
+            # x_in = Input(shape=[None] + list(obs_dim))
+            # x = Lambda(K.reshape, arguments={"shape": [-1] + list(obs_dim)})(x_in)
+            # model = Model(inputs=x_in, outputs=x)
+
+            model = Sequential()
+            input_shape = [None] + list(obs_dim)
+            model.add(Conv3D(64, (1, 3, 3), strides=(1, 3, 3), activation="relu", input_shape=input_shape))
+            seq_length = tf.shape(model.input)[1]
+            model.add(Conv3D(128, (1, 3, 3), strides=(1, 3, 3), activation="relu"))
+            model.add(Conv3D(32, (1, 3, 3), strides=(1, 3, 3), activation="relu"))
+
+            dim_feature = np.prod(model.output.shape.as_list()[2:])
+            model.add(Lambda(K.reshape, arguments={"shape":[-1, seq_length, dim_feature]}))
+
+            return model, obs_dim
+            # x_placeholder = tf.placeholder(tf.float32, [None] + list(observation_space.shape),
+            #                                name="observation")
+            # x = x_placeholder
+            # for i in range(4):
+            #     x = tf.nn.elu(conv2d(x, 32, "l{}".format(i + 1), [3, 3], [2, 2]))
+            # x = flatten(x)
+            # return x_placeholder, x
+
         # e.g. CartPole
         elif len(observation_space.shape) is 1:
             obs_dim = list(observation_space.shape[:1])
