@@ -4,8 +4,8 @@ import tensorflow as tf
 import tensorflow.contrib.rnn as rnn
 import distutils
 from keras.models import Sequential, Model
-from keras.layers import Dense, Activation, InputLayer, Convolution2D, Flatten, Reshape
-from keras.layers.convolutional import Conv2D, Conv3D
+from keras.layers import Dense, InputLayer, Flatten, TimeDistributed
+from keras.layers.convolutional import Conv2D
 from keras import backend as K
 from keras.layers import Input, Lambda
 
@@ -87,23 +87,17 @@ class LinearPolicy(object):
         return sess.run({"value": self.values}, {self.x: obsevation})
 
     def _build_value_network(self, model):
-        model.add(Dense(self.n_hidden))
-        model.add(Activation("relu"))
-        # hidden_v = relu(x, 50, "hidden0", normalized_columns_initializer())
+        model.add(TimeDistributed(Dense(self.n_hidden, activation="relu")))
         for i in range(1):
-            model.add(Dense(self.n_hidden, activation="relu"))
-            # hidden_v = linear(hidden_v, 50, "hidden{}".format(i+1), normalized_columns_initializer())
-        # self.values = tf.reshape(linear(hidden_v, 1, "value", normalized_columns_initializer()), [-1])
-        model.add(Dense(1, activation="linear"))
+            model.add(TimeDistributed(Dense(self.n_hidden, activation="relu")))
+        model.add(TimeDistributed(Dense(1, activation="linear")))
         self.values = model.output
 
     def _build_policy_network(self, model):
-        # hidden_pi = relu(x, 50, "hidden0", normalized_columns_initializer())
-        # i = 0
-        model.add(Dense(self.n_hidden, activation="relu"))
+        model.add(TimeDistributed(Dense(self.n_hidden, activation="relu")))
         for i in range(0):
-            model.add(Dense(self.n_hidden, activation="relu"))
-        model.add(Dense(self.action_dim, activation="softmax"))
+            model.add(TimeDistributed(Dense(self.n_hidden, activation="relu")))
+        model.add(TimeDistributed(Dense(self.action_dim, activation="softmax")))
         self.logits = model.output
 
 
@@ -205,56 +199,30 @@ def preprocess_observation_space(observation_space, n_hidden=32):
         # If observation is an image, add CNN
         if len(observation_space.shape) is 3 and\
             observation_space.shape[-1] is 3:
-            # conv 2d
-            # obs_dim = observation_space.shape
-            # x_in = Input(shape=[None] + list(obs_dim))
-            # x = Lambda(K.reshape, arguments={"shape": [-1] + list(obs_dim)})(x_in)
-            # model = Model(inputs=x_in, outputs=x)
-            #
-            # model = Sequential(model.layers)
-            # b = tf.shape(model.input)[1]
-            # model.add(Conv2D(32, (3, 3), strides=(3, 3), activation="relu", input_shape=obs_dim))
-            # model.add(Conv2D(32, (3, 3), strides=(3, 3), activation="relu"))
-            #
-            # m = np.prod(model.output.shape.as_list()[1:])
-            # model.add(Lambda(K.reshape, arguments={"shape":[-1, b, m]}))
-
-
-            # conv 3D
             obs_dim = observation_space.shape
-
-            # x_in = Input(shape=[None] + list(obs_dim))
-            # x = Lambda(K.reshape, arguments={"shape": [-1] + list(obs_dim)})(x_in)
-            # model = Model(inputs=x_in, outputs=x)
+            input_shape = [None] + list(obs_dim)
+            print("Observation dim :", obs_dim)
 
             model = Sequential()
-            input_shape = [None] + list(obs_dim)
-            model.add(Conv3D(64, (1, 3, 3), strides=(1, 3, 3), activation="relu", input_shape=input_shape))
-            seq_length = tf.shape(model.input)[1]
-            model.add(Conv3D(128, (1, 3, 3), strides=(1, 3, 3), activation="relu"))
-            model.add(Conv3D(32, (1, 3, 3), strides=(1, 3, 3), activation="relu"))
-
-            dim_feature = np.prod(model.output.shape.as_list()[2:])
-            model.add(Lambda(K.reshape, arguments={"shape":[-1, seq_length, dim_feature]}))
+            model.add(TimeDistributed(Conv2D(64, (3, 3), strides=(3, 3), activation="relu"),
+                                      input_shape=input_shape))
+            model.add(TimeDistributed(Conv2D(128, (3, 3), strides=(3, 3), activation="relu")))
+            model.add(TimeDistributed(Conv2D(32, (3, 3), strides=(3, 3), activation="relu")))
+            model.add(TimeDistributed(Flatten()))
 
             return model, obs_dim
-            # x_placeholder = tf.placeholder(tf.float32, [None] + list(observation_space.shape),
-            #                                name="observation")
-            # x = x_placeholder
-            # for i in range(4):
-            #     x = tf.nn.elu(conv2d(x, 32, "l{}".format(i + 1), [3, 3], [2, 2]))
-            # x = flatten(x)
-            # return x_placeholder, x
 
         # e.g. CartPole
         elif len(observation_space.shape) is 1:
             obs_dim = list(observation_space.shape[:1])
-            print("observation dim :", obs_dim)
+            print("Observation dim :", obs_dim)
             # [batch, seq_length, obs_dim]
+            input_shape = [None, observation_space.shape[0]]
             model = Sequential()
-            model.add(Dense(n_hidden, input_shape=[None, observation_space.shape[0]], activation="relu"))
+            model.add(TimeDistributed(Dense(n_hidden, activation="relu"),
+                                      input_shape=input_shape))
             for i in range(2):
-                model.add(Dense(n_hidden, activation="relu"))
+                model.add(TimeDistributed(Dense(n_hidden, activation="relu")))
             return model, obs_dim
         else:
             print("Not implemented yet!")
